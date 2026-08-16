@@ -40,13 +40,15 @@ set(PROJECT_DEVICEVIRTUAL_CORE_SOURCE_DIR ./core/src)
 set(PROJECT_DEVICEVIRTUAL_CORE_INCLUDE_DIR ./core/include)
 set(PROJECT_DEVICEVIRTUAL_NET_SOURCE_DIR ./network/src)
 set(PROJECT_DEVICEVIRTUAL_NET_INCLUDE_DIR ./network/include)
+set(PROJECT_DEVICEVIRTUAL_APP_SOURCE_DIR ./app/src)
+set(PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR ./app/include)
 
 if(WIN32)
-include_directories(${PROJECT_DEVICEVIRTUAL_CORE_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_NET_INCLUDE_DIR} C:/msys64/mingw64/include/)
+include_directories(${PROJECT_DEVICEVIRTUAL_CORE_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_NET_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR} C:/msys64/mingw64/include/)
 link_libraries(ws2_32)
 link_directories(C:/msys64/mingw64/lib/)
 else()
-include_directories(${PROJECT_DEVICEVIRTUAL_CORE_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_NET_INCLUDE_DIR} /usr/include/ /usr/local/include/)
+include_directories(${PROJECT_DEVICEVIRTUAL_CORE_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_NET_INCLUDE_DIR} ${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR} /usr/include/ /usr/local/include/)
 link_libraries(rt pthread dl)
 link_directories(/usr/local/lib/ /usr/lib/ /lib/)
 endif()
@@ -104,9 +106,22 @@ else()
     )
 endif()
 
+set(APP_SOURCES
+${APP_SOURCES}
+${PROJECT_DEVICEVIRTUAL_APP_SOURCE_DIR}/Sensing.cpp
+${PROJECT_DEVICEVIRTUAL_APP_SOURCE_DIR}/Actuation.cpp
+)
 
-add_executable("VirtualSensors" ./src/VirtualSensors.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS})
-add_executable("VirtualActuators" ./src/VirtualActuators.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS})
+set(APP_HEADERS
+${APP_HEADERS}
+${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR}/Sensing.hpp
+${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR}/Actuation.hpp
+${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR}/Application.hpp
+)
+
+
+add_executable("VirtualSensors" ./src/VirtualSensors.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS} ${APP_SOURCES} ${APP_HEADERS})
+add_executable("VirtualActuators" ./src/VirtualActuators.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS} ${APP_SOURCES} ${APP_HEADERS})
 
 
 
