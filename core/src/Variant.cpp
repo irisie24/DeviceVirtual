@@ -4,7 +4,7 @@
 Variant::Variant()
 {
     dataType = Void;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     dataSize = 0;
 }
 
@@ -43,7 +43,7 @@ Variant::Variant(const char *val)
     }
 
     dataType = AsciiString;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     strncpy((char*)&rawBuffer[0], val, sz);
     dataSize = sz;
 }
@@ -55,7 +55,7 @@ Variant::Variant(const unsigned char* val, unsigned int &sz)
         sz = 255;
     }
     dataType = Raw;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, val, sz);
     dataSize = sz;
 }
@@ -63,7 +63,7 @@ Variant::Variant(const unsigned char* val, unsigned int &sz)
 Variant::Variant(const bool val)
 {
     dataType = Boolean;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(bool));
     dataSize = sizeof(bool);
 }
@@ -71,7 +71,7 @@ Variant::Variant(const bool val)
 Variant::Variant(const long val)
 {
     dataType = Number;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(long));
     dataSize = sizeof(long);
 }
@@ -79,7 +79,7 @@ Variant::Variant(const long val)
 Variant::Variant(const unsigned long val)
 {
     dataType = UnsignedNumber;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(unsigned long));
     dataSize = sizeof(unsigned long);
 }
@@ -87,7 +87,7 @@ Variant::Variant(const unsigned long val)
 Variant::Variant(const double val)
 {
     dataType = Decimal;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(double));
     dataSize = sizeof(double);
 }
@@ -95,7 +95,7 @@ Variant::Variant(const double val)
 Variant::Variant(const tm val)
 {
     dataType = TimeStamp;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(struct tm));
     dataSize = sizeof(struct tm);
 }
@@ -145,7 +145,7 @@ void Variant::SetData(const char *val, bool trim)
     }
 
     dataType = AsciiString;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     strncpy((char*)&rawBuffer[0], val, sz);
 	dataSize = sz;
 
@@ -182,7 +182,7 @@ void Variant::SetData(const unsigned char* val, int &sz)
         sz = 255;
     }
     dataType = Raw;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, val, sz);
     dataSize = sz;
 }
@@ -190,7 +190,7 @@ void Variant::SetData(const unsigned char* val, int &sz)
 void Variant::SetData(const bool val)
 {
     dataType = Boolean;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(bool));
     dataSize = sizeof(bool);
 }
@@ -198,7 +198,7 @@ void Variant::SetData(const bool val)
 void Variant::SetData(const long val)
 {
     dataType = Number;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(long));
     dataSize = sizeof(long);
 }
@@ -206,7 +206,7 @@ void Variant::SetData(const long val)
 void Variant::SetData(const unsigned long val)
 {
     dataType = UnsignedNumber;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(unsigned long));
     dataSize = sizeof(unsigned long);
 }
@@ -214,7 +214,7 @@ void Variant::SetData(const unsigned long val)
 void Variant::SetData(const double val)
 {
     dataType = Decimal;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(double));
     dataSize = sizeof(double);
 }
@@ -222,7 +222,7 @@ void Variant::SetData(const double val)
 void Variant::SetData(const tm val)
 {
     dataType = TimeStamp;
-    std::ranges::fill(rawBuffer, 0);
+    memset(rawBuffer, 0, sizeof(rawBuffer));
     memcpy(rawBuffer, &val, sizeof(struct tm));
     dataSize = sizeof(struct tm);
 }
@@ -233,7 +233,7 @@ std::string Variant::GetString()
     str.clear();
 
     char ptr[255];
-    std::ranges::fill(rawBuffer, 0);
+    memset(ptr, 0, sizeof(ptr));
 
     switch(dataType)
     {

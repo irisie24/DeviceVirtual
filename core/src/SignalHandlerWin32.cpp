@@ -75,10 +75,13 @@ bool SignalHandler::isShutdownSignal(const int signum)
     return isShutdownSignalImpl(signum);
 }
 
+namespace
+{
 void shutdownCallback(int signo)
 {
     if (callback && signo != SIGSEGV)
     {
         callback->shutdown();
     }
+}
 }
