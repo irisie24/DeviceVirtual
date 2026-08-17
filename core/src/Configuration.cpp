@@ -202,9 +202,9 @@ std::string Configuration::resolveConfigPath()
 
         if (localAppData && user) 
         {
-            return std::filesystem::path(localAppData) / _AppName;
+            return std::filesystem::path(localAppData).generic_string() + "/" + user + "/" + _AppName;
         }
-        return std::filesystem::path("C:/Users/Public/AppData/Local") / _AppName;
+        return "C:/Users/Public/AppData/Local/"
 
     #else // POSIX
         uid_t uid = geteuid();
