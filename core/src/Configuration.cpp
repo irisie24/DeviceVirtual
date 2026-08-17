@@ -195,23 +195,25 @@ void Configuration::addSection(const std::string &str, const std::map<std::strin
 std::string Configuration::resolveConfigPath() 
 {
     std::string _AppName = "";
+    char exePath[4097] = {0};
 
     #ifdef _WIN32
         const char* user = std::getenv("USERNAME");
         const char* localAppData = std::getenv("LOCALAPPDATA");
+        GetModuleFileNameA(NULL, exePath, sizeof(exePath));
+        _AppName = std::filesystem::path(exePath).stem().string();
 
         if (localAppData && user) 
         {
-            return std::filesystem::path(localAppData).generic_string() + "/" + user + "/" + _AppName;
+            return std::filesystem::path(localAppData).generic_string() + "/"  + _AppName;
         }
-        return "C:/Users/Public/AppData/Local/"
+        return "C:/Users/Public/AppData/Local/";
 
     #else // POSIX
         uid_t uid = geteuid();
         const char* user = std::getenv("USER");
         const char* home = std::getenv("HOME");
 
-        char exePath[4097] = {0};
         ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath)-1);
         if (len != -1)
         {

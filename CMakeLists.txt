@@ -121,7 +121,7 @@ ${PROJECT_DEVICEVIRTUAL_APP_INCLUDE_DIR}/Application.hpp
 
 
 add_executable("VirtualSensors" ./src/VirtualSensors.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS} ${APP_SOURCES} ${APP_HEADERS})
-add_executable("VirtualActuators" ./src/VirtualActuators.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS} ${APP_SOURCES} ${APP_HEADERS})
+#add_executable("VirtualActuators" ./src/VirtualActuators.cpp ${CORE_SOURCES} ${CORE_HEADERS} ${NET_SOURCES} ${NET_HEADERS} ${APP_SOURCES} ${APP_HEADERS})
 
 
 
