@@ -70,3 +70,5 @@ Testing/
 temp/
 build/
 
+.vscode/
+

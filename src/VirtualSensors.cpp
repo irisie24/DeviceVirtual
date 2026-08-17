@@ -82,7 +82,9 @@ int main(int argc, char* argv[])
 {    
     g_logger = Logger::GetInstance();
 
-    if(g_config.loadCustomConfiguration("DeviceVirtual.ini"))
+    g_config.setFileName("DeviceVirtual.ini");
+
+    if(g_config.loadConfiguration())
     {
         writeLog("Configuration loaded successfully.", LogLevel::Info);
     }
