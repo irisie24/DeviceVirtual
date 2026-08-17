@@ -18,6 +18,7 @@
 typedef enum FlowType
 {
     BaseLine,
+    Normal,
     Spikes,
     DeadF,
     Stuck,
