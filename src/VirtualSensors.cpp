@@ -1,5 +1,4 @@
 /*
-* The entry point of the HTTP REST API server application.
 * All code follows Pascal case and Allman Style.
 */
 

@@ -6,6 +6,8 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <string>
+#include <optional>
 
 class Configuration
 {
@@ -20,6 +22,7 @@ public:
 private:
 	bool loadConfiguration(const std::string &configFile);
 	void addSection(const std::string &str, const std::map<std::string, std::string> &list);
+	std::string resolveConfigPath();
 	std::map<std::string, std::map<std::string, std::string>> _ConfigurationMap;
 	std::string _ConfigFileName;
 };

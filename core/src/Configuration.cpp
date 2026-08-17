@@ -1,5 +1,12 @@
 #include "Configuration.hpp"
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
+
 Configuration::Configuration()
 {
 	_ConfigFileName = "";
@@ -17,7 +24,7 @@ void Configuration::setFileName(std::string fname)
 bool Configuration::isSection(const std::string &section)
 {
 	std::map<std::string, std::string> *subsection = nullptr;
-	auto it = _ConfigurationMap.find(section);
+    std::map<std::string, std::map<std::string, std::string>>::iterator it = _ConfigurationMap.find(section);
 	if (it != _ConfigurationMap.end())
 	{
 		subsection = &it->second;
@@ -38,7 +45,7 @@ std::string Configuration::getValue(const std::string &section, const std::strin
 	std::string str;
 
 	std::map<std::string, std::string> *subsection = nullptr;
-	auto it = _ConfigurationMap.find(section);
+    std::map<std::string, std::map<std::string, std::string>>::iterator it = _ConfigurationMap.find(section);
 	if (it != _ConfigurationMap.end())
 	{
 		subsection = &it->second;
@@ -51,7 +58,7 @@ std::string Configuration::getValue(const std::string &section, const std::strin
 	else
 	{
 		std::string *value = nullptr;
-		auto vit = subsection->find(settingKey);
+        std::map<std::string, std::string>::iterator vit = subsection->find(settingKey);
 		if (vit != subsection->end())
 		{
 			value = &vit->second;
@@ -78,21 +85,16 @@ bool Configuration::loadConfiguration()
         return false;
     }
 
-    const std::filesystem::path current = std::filesystem::current_path();
-    const std::vector<std::filesystem::path> candidatePaths = {
-        current / "etc" / _ConfigFileName,
-        current / "config" / _ConfigFileName,
-        current.parent_path() / "etc" / _ConfigFileName,
-        current.parent_path() / "config" / _ConfigFileName,
-        std::filesystem::path("/etc") / _ConfigFileName,
-        std::filesystem::path("/etc") / "config" / _ConfigFileName
-    };
+    std::string resolvedPath = resolveConfigPath();
 
-    for (const auto& candidate : candidatePaths)
+    std::cout << resolvedPath;
+
+    if (!resolvedPath.empty() && std::filesystem::exists(resolvedPath) && std::filesystem::is_regular_file(resolvedPath))
     {
-        if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate))
+        std::string resolvedConfigFile = resolvedPath + "/" + _ConfigFileName;
+        if (std::filesystem::exists(resolvedConfigFile) && std::filesystem::is_regular_file(resolvedConfigFile))
         {
-            return loadConfiguration(candidate.string());
+            return loadConfiguration(resolvedConfigFile);
         }
     }
 
@@ -107,14 +109,14 @@ bool Configuration::loadConfiguration(const std::string &configFile)
         return false;
     }
 
-    auto trim = [](std::string value) {
-        const auto begin = value.find_first_not_of(" \t\r\n");
+    std::string (*trim)(std::string) = [](std::string value) -> std::string {
+        const std::string::size_type begin = value.find_first_not_of(" \t\r\n");
         if (begin == std::string::npos)
         {
             return std::string{};
         }
 
-        const auto end = value.find_last_not_of(" \t\r\n");
+        const std::string::size_type end = value.find_last_not_of(" \t\r\n");
         return value.substr(begin, end - begin + 1);
     };
 
@@ -144,7 +146,7 @@ bool Configuration::loadConfiguration(const std::string &configFile)
             continue;
         }
 
-        const auto delimiterPos = trimmed.find('=');
+        const std::string::size_type delimiterPos = trimmed.find('=');
         if (delimiterPos == std::string::npos)
         {
             continue;
@@ -171,14 +173,14 @@ void Configuration::addSection(const std::string &str, const std::map<std::strin
 {
     std::string section = str;
 
-    const auto begin = section.find_first_not_of(" \t\r\n[");
+    const std::string::size_type begin = section.find_first_not_of(" \t\r\n[");
     if (begin == std::string::npos)
     {
         return;
     }
 
     section.erase(0, begin);
-    const auto end = section.find_last_not_of(" \t\r\n]");
+    const std::string::size_type end = section.find_last_not_of(" \t\r\n]");
     if (end != std::string::npos)
     {
         section.erase(end + 1);
@@ -190,3 +192,63 @@ void Configuration::addSection(const std::string &str, const std::map<std::strin
     }
 }
 
+std::string Configuration::resolveConfigPath() 
+{
+    std::string _AppName = "";
+
+    #ifdef _WIN32
+        const char* user = std::getenv("USERNAME");
+        const char* localAppData = std::getenv("LOCALAPPDATA");
+
+        if (localAppData && user) 
+        {
+            return std::filesystem::path(localAppData) / _AppName;
+        }
+        return std::filesystem::path("C:/Users/Public/AppData/Local") / _AppName;
+
+    #else // POSIX
+        uid_t uid = geteuid();
+        const char* user = std::getenv("USER");
+        const char* home = std::getenv("HOME");
+
+        char exePath[4097] = {0};
+        ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath)-1);
+        if (len != -1)
+        {
+            exePath[len] = '\0';
+            _AppName = std::filesystem::path(exePath).stem().string();
+        }
+
+        if (uid == 0)
+        { // root
+            if (std::filesystem::exists("/etc/" ))
+                return "/etc/" ;
+
+            if (std::filesystem::exists("/usr/local/etc/" ))
+                return "/usr/local/etc/" ;
+
+            if (std::filesystem::exists("/usr/etc/"))
+                return "/usr/etc/" ;
+        }
+        else
+        { // user
+            if (home && user)
+            {
+                std::filesystem::path userPath = std::filesystem::path(home) / ".config" / "applications" / user / _AppName;
+                if (std::filesystem::exists(userPath))
+                {
+                    return userPath.generic_string();
+                }
+            }
+            if (home)
+            {
+                std::filesystem::path xdgPath = std::filesystem::path(home) / ".config" / _AppName;
+                if (std::filesystem::exists(xdgPath)) 
+                {
+                    return xdgPath.generic_string();
+                }
+            }
+        }
+        return "";
+    #endif
+}
