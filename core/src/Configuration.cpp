@@ -6,6 +6,25 @@
 #include <unistd.h>
 #endif
 
+namespace
+{
+std::string trimWhitespace(const std::string &value)
+{
+    const std::string::size_type begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos)
+    {
+        return std::string();
+    }
+
+    const std::string::size_type end = value.find_last_not_of(" \t\r\n");
+    if (end == std::string::npos)
+    {
+        return std::string();
+    }
+
+    return value.substr(begin, end - begin + 1);
+}
+}
 
 Configuration::Configuration()
 {
@@ -87,11 +106,10 @@ bool Configuration::loadConfiguration()
 
     std::string resolvedPath = resolveConfigPath();
 
-    std::cout << resolvedPath;
-
-    if (!resolvedPath.empty() && std::filesystem::exists(resolvedPath) && std::filesystem::is_regular_file(resolvedPath))
+    if (!resolvedPath.empty() && std::filesystem::exists(resolvedPath))
     {
         std::string resolvedConfigFile = resolvedPath + "/" + _ConfigFileName;
+
         if (std::filesystem::exists(resolvedConfigFile) && std::filesystem::is_regular_file(resolvedConfigFile))
         {
             return loadConfiguration(resolvedConfigFile);
@@ -109,17 +127,6 @@ bool Configuration::loadConfiguration(const std::string &configFile)
         return false;
     }
 
-    std::string (*trim)(std::string) = [](std::string value) -> std::string {
-        const std::string::size_type begin = value.find_first_not_of(" \t\r\n");
-        if (begin == std::string::npos)
-        {
-            return std::string{};
-        }
-
-        const std::string::size_type end = value.find_last_not_of(" \t\r\n");
-        return value.substr(begin, end - begin + 1);
-    };
-
     _ConfigurationMap.clear();
 
     std::string currentSection;
@@ -128,7 +135,7 @@ bool Configuration::loadConfiguration(const std::string &configFile)
 
     while (std::getline(input, line))
     {
-        std::string trimmed = trim(line);
+        std::string trimmed = trimWhitespace(line);
         if (trimmed.empty() || trimmed[0] == ';' || trimmed[0] == '#')
         {
             continue;
@@ -152,8 +159,8 @@ bool Configuration::loadConfiguration(const std::string &configFile)
             continue;
         }
 
-        std::string key = trim(trimmed.substr(0, delimiterPos));
-        std::string value = trim(trimmed.substr(delimiterPos + 1));
+        std::string key = trimWhitespace(trimmed.substr(0, delimiterPos));
+        std::string value = trimWhitespace(trimmed.substr(delimiterPos + 1));
 
         if (!currentSection.empty() && !key.empty())
         {
@@ -196,6 +203,7 @@ std::string Configuration::resolveConfigPath()
 {
     std::string _AppName = "";
     char exePath[4097] = {0};
+    std::string configPath = "";
 
     #ifdef _WIN32
         const char* user = std::getenv("USERNAME");
@@ -205,9 +213,12 @@ std::string Configuration::resolveConfigPath()
 
         if (localAppData && user) 
         {
-            return std::filesystem::path(localAppData).generic_string() + "/"  + _AppName;
+            configPath = std::filesystem::path(localAppData).generic_string() + "/"  + _AppName;
         }
-        return "C:/Users/Public/AppData/Local/";
+        else
+        {
+            configPath = (std::filesystem::path("C:/Users/") / user / "AppData/Local" / _AppName).generic_string();
+        }
 
     #else // POSIX
         uid_t uid = geteuid();
@@ -224,33 +235,63 @@ std::string Configuration::resolveConfigPath()
         if (uid == 0)
         { // root
             if (std::filesystem::exists("/etc/" ))
-                return "/etc/" ;
+                configPath = "/etc/" ;
 
             if (std::filesystem::exists("/usr/local/etc/" ))
-                return "/usr/local/etc/" ;
+                configPath = "/usr/local/etc/" ;
 
             if (std::filesystem::exists("/usr/etc/"))
-                return "/usr/etc/" ;
+                configPath = "/usr/etc/" ;
         }
         else
         { // user
             if (home && user)
             {
-                std::filesystem::path userPath = std::filesystem::path(home) / ".config" / "applications" / user / _AppName;
-                if (std::filesystem::exists(userPath))
+                std::filesystem::path userPath = std::filesystem::path(home) / ".config" / "applications" / _AppName;
+                if (!std::filesystem::exists(userPath))
                 {
-                    return userPath.generic_string();
+                    std::filesystem::create_directories(userPath);
                 }
+                configPath = userPath.generic_string();
             }
-            if (home)
+            else
             {
-                std::filesystem::path xdgPath = std::filesystem::path(home) / ".config" / _AppName;
-                if (std::filesystem::exists(xdgPath)) 
+                if (home && !user)
                 {
-                    return xdgPath.generic_string();
+                    std::filesystem::path xdgPath = std::filesystem::path(home) / ".config" / _AppName;
+                    if (!std::filesystem::exists(xdgPath)) 
+                    {
+                        std::filesystem::create_directories(xdgPath);
+                    }
+                    configPath = xdgPath.generic_string();
                 }
             }
         }
-        return "";
+      
+        return configPath;
+
     #endif
+}
+
+std::list<std::string> Configuration::getSections()
+{
+    std::list<std::string> sections;
+    for (const auto &pair : _ConfigurationMap)
+    {
+        sections.push_back(pair.first);
+    }
+    return sections;
+}
+
+std::list<std::string> Configuration::getKeys(const std::string &section)
+{
+    std::list<std::string> keys;
+    if (_ConfigurationMap.find(section) != _ConfigurationMap.end())
+    {
+        for (const auto &pair : _ConfigurationMap[section])
+        {
+            keys.push_back(pair.first);
+        }
+    }
+    return keys;
 }

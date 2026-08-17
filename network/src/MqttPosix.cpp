@@ -12,8 +12,6 @@
 #include <algorithm>
 #include <cstdint>
 
-namespace
-{
 constexpr std::uint8_t kConnect = 0x10;
 constexpr std::uint8_t kConnAck = 0x20;
 constexpr std::uint8_t kPublish = 0x30;
@@ -98,9 +96,35 @@ std::vector<std::uint8_t> encodeStringPayload(const std::string& value)
     packet.insert(packet.end(), value.begin(), value.end());
     return packet;
 }
+// End of anonymous namespace
+
+MqttClient::MqttClient()
+{
+    isConnected_ = false;
+    socketFd_ = -1;
+    qos_ = 1;
+    timeout_ = 30;
+    stopReader_ = false;
+    nextPacketId_ = 1;
 }
 
 MqttClient::MqttClient(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
+{
+    brokerAddress_ = brokerAddress;
+    port_ = port;
+    clientId_ = clientId;
+    username_ = username;
+    password_ = password;
+    callback_ = callback;
+    isConnected_ = false;
+    socketFd_ = -1;
+    qos_ = 1;
+    timeout_ = 30;
+    stopReader_ = false;
+    nextPacketId_ = 1;
+}
+
+void MqttClient::Initialize(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
 {
     brokerAddress_ = brokerAddress;
     port_ = port;

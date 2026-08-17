@@ -19,8 +19,8 @@ std::mutex& GetLoggerMutex()
 
 std::string GetTimestampString()
 {
-    const auto now = std::chrono::system_clock::now();
-    const auto time = std::chrono::system_clock::to_time_t(now);
+    const std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
     std::tm localTime{};
 
 #if defined(_WIN32) || defined(WIN32)
@@ -54,13 +54,13 @@ std::string GetLevelString(LogLevel level)
 std::string GetShortFunctionName(const std::string& functionName)
 {
     std::string result = functionName;
-    const auto begin = result.find_last_of(':');
+    const std::string::size_type begin = result.find_last_of(':');
     if (begin != std::string::npos)
     {
         result = result.substr(begin + 1);
     }
 
-    const auto paren = result.find('(');
+    const std::string::size_type paren = result.find('(');
     if (paren != std::string::npos)
     {
         result = result.substr(0, paren);
@@ -142,7 +142,7 @@ void Logger::write(std::string logEntry, LogLevel llevel, const char* func, cons
 
     std::lock_guard<std::mutex> lock(GetLoggerMutex());
 
-    const auto fileSize = static_cast<long long>(_LogFile.tellp());
+    const long long fileSize = static_cast<long long>(_LogFile.tellp());
     if (fileSize >= (_LogFileSize * 1024LL))
     {
         std::string backupName;
@@ -184,7 +184,7 @@ void Logger::setModuleName(std::string mname)
 
     const std::filesystem::path modulePath(mname);
     _ModuleName = modulePath.filename().string();
-    const auto extensionPos = _ModuleName.find_last_of('.');
+    const std::string::size_type extensionPos = _ModuleName.find_last_of('.');
     if (extensionPos != std::string::npos && extensionPos > 0)
     {
         const std::string extension = _ModuleName.substr(extensionPos);

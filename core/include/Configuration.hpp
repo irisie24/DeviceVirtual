@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <optional>
+#include <list>
 
 class Configuration
 {
@@ -19,6 +20,8 @@ public:
 	bool loadCustomConfiguration(const std::string &configFile);
 	std::string getValue(const std::string &section, const std::string &settingKey, const std::string defval = "");
 	bool isSection(const std::string &section);
+	std::list<std::string> getSections();
+	std::list<std::string> getKeys(const std::string &section);
 private:
 	bool loadConfiguration(const std::string &configFile);
 	void addSection(const std::string &str, const std::map<std::string, std::string> &list);

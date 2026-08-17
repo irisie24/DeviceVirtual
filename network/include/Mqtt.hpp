@@ -26,10 +26,12 @@ public:
 class MqttClient
 {
     public:
+        MqttClient();
         MqttClient(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback);
         ~MqttClient();
 
         // Connect will commence with QoS level and timeout parameters. The default QoS level is 1 and the default timeout is 30 seconds.
+        void Initialize(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback);
         void connect(int qos = 1, int timeout = 30);
 
         void disconnect();
