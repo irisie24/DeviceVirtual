@@ -20,17 +20,17 @@ typedef enum FlowType
     BaseLine,
     Normal,
     Spikes,
-    DeadF,
+    Dead,
     Stuck,
     Offset,
     Noise,
-    Drift   
+    Drift,
+    Unknown   
 }FlowType;
 
 typedef struct Flow
 {
     FlowType type;
-    unsigned long value;
     unsigned long scale;
     unsigned long duration;
     unsigned long unixepochstart;
@@ -62,10 +62,27 @@ public:
     void addFlow(Flow flow);
     std::list<Flow> getFlows();
     bool removeFlow(Flow flow);
+    void setRepeatable(bool repeatable, unsigned long unixepochend);
     bool startSimulation(SensorCallback* callback);
 private:
+    unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
+
+    void computeMaxOfBaseline();
+    void computeMinOfBaseline();
+    void computeMedianOfBaseline();
+    void computeAverageOfBaseline();
+
+    static void SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback);
+
     std::list<Flow> _flows;
     SensorCallback* _callbackPtr;
+    bool _repeatable;
+    unsigned long _unixepochend;
+    std::list<Telemetry> _baselineTelemetry;
+    unsigned long _maxBaseline;
+    unsigned long _minBaseline;
+    unsigned long _medianBaseline;
+    unsigned long _averageBaseline;
 };
 
 

@@ -112,7 +112,7 @@ FlowType parseFlowType(const std::string& value)
     }
     if (value == "dead")
     {
-        return DeadF;
+        return Dead;
     }
     if (value == "stuck")
     {
