@@ -40,6 +40,11 @@ void Configuration::setFileName(std::string fname)
 	_ConfigFileName = fname;
 }
 
+std::string Configuration::getConfigDirectory()
+{
+    return resolveConfigPath();
+}
+
 bool Configuration::isSection(const std::string &section)
 {
 	std::map<std::string, std::string> *subsection = nullptr;

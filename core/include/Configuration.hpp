@@ -16,6 +16,7 @@ public:
 	Configuration();
 	~Configuration();
 	void setFileName(std::string fname);
+	std::string getConfigDirectory();
 	bool loadConfiguration();
 	bool loadCustomConfiguration(const std::string &configFile);
 	std::string getValue(const std::string &section, const std::string &settingKey, const std::string defval = "");

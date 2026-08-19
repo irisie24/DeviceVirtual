@@ -14,6 +14,12 @@
 
 // Flow type
 
+typedef enum SimulationMode
+{
+    SimulationModeDataset,
+    SimulationModeRealtime
+}SimulationMode;
+
 // Sensor simulation flow type
 typedef enum FlowType
 {
@@ -24,7 +30,8 @@ typedef enum FlowType
     Stuck,
     Offset,
     Noise,
-    Drift,
+    DriftLinear,
+    DriftStepped,
     Unknown   
 }FlowType;
 
@@ -52,6 +59,7 @@ class SensorCallback
 {
 public:
     virtual void onTelemetryReceived(const Telemetry& telemetry) = 0;
+    virtual void onTelemetryGenerationComplete(const std::string& telemetryfilename) = 0;
 };
 
 class Sensing
@@ -63,6 +71,9 @@ public:
     std::list<Flow> getFlows();
     bool removeFlow(Flow flow);
     void setRepeatable(bool repeatable, unsigned long unixepochend);
+    void setSimulationMode(SimulationMode simulationMode);
+    void setFlowSetName(const std::string& flowSetName);
+    SimulationMode getSimulationMode();
     bool startSimulation(SensorCallback* callback);
 private:
     unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
@@ -75,14 +86,15 @@ private:
     static void SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback);
 
     std::list<Flow> _flows;
-    SensorCallback* _callbackPtr;
     bool _repeatable;
     unsigned long _unixepochend;
+    SimulationMode _simulationMode;
     std::list<Telemetry> _baselineTelemetry;
     unsigned long _maxBaseline;
     unsigned long _minBaseline;
     unsigned long _medianBaseline;
     unsigned long _averageBaseline;
+    std::string _flowSetName;
 };
 
 

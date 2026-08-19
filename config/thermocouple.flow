@@ -1,0 +1,93 @@
+[General]
+sensor_name=Thermal Outdoors
+make=A
+model=B
+num_flows=8
+repeat_flow_sequence=1
+flow_sequence_end=2026/12/31 23:59:59
+simulation_mode=dataset
+sensor_operating_max=105
+sensor_operating_min=-35
+sensor_geo_lat=2232
+sensor_geo_lon=8835
+distribution_algorithm=markov
+
+[FLOW_1]
+type=baseline
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/05/01 00:00:00
+end=2026/05/31 23:59:59
+intervalsecs=300
+
+[FLOW_2]
+type=spikes
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/01 00:00:00
+end=2026/06/05 23:59:59
+intervalsecs=300
+
+[FLOW_3]
+type=dead
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/06 00:00:00
+end=2026/06/10 23:59:59
+intervalsecs=300
+
+[FLOW_4]
+type=stuck
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/11 00:00:00
+end=2026/06/15 23:59:59
+intervalsecs=300
+
+[FLOW_5]
+type=offset
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/16 00:00:00
+end=2026/06/20 23:59:59
+intervalsecs=300
+
+[FLOW_6]
+type=noise
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/21 00:00:00
+end=2026/06/25 23:59:59
+intervalsecs=300
+
+[FLOW_7]
+type=driftlinear
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/06/26 00:00:00
+end=2026/06/30 23:59:59
+intervalsecs=300
+
+[FLOW_8]
+type=driftstepped
+max=55
+min=18
+uom=celsius
+scale=10
+start=2026/07/01 00:00:00
+end=2026/07/05 23:59:59
+intervalsecs=300

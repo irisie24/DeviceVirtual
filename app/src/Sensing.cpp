@@ -15,6 +15,7 @@ Sensing::Sensing()
 {
     _repeatable = false;
     _unixepochend = 0;
+    _simulationMode = SimulationModeDataset;
 }
 
 Sensing::~Sensing()
@@ -35,6 +36,21 @@ void Sensing::setRepeatable(bool repeatable, unsigned long unixepochend)
 {
     _repeatable = repeatable;
     _unixepochend = unixepochend;
+}
+
+void Sensing::setSimulationMode(SimulationMode simulationMode)
+{
+    _simulationMode = simulationMode;
+}
+
+SimulationMode Sensing::getSimulationMode()
+{
+    return _simulationMode;
+}
+
+void Sensing::setFlowSetName(const std::string& flowSetName)
+{
+    _flowSetName = flowSetName + ".csv"; // Append .csv to the flow set name
 }
 
 bool Sensing::removeFlow(Flow flow)
@@ -58,11 +74,16 @@ bool Sensing::removeFlow(Flow flow)
 
 bool Sensing::startSimulation(SensorCallback* callback)
 {
-    _callbackPtr = callback;
     _baselineTelemetry.clear(); 
-    // Start the simulation in a separate thread
-    std::thread simulationThread(Sensing::SimulationThreadProc, this, _callbackPtr);
-    simulationThread.detach(); // Detach the thread to run independently
+    if (_simulationMode == SimulationModeRealtime)
+    {
+        std::thread simulationThread(Sensing::SimulationThreadProc, this, callback);
+        simulationThread.detach();
+    }
+    else
+    {
+        SimulationThreadProc(this, callback);
+    }
 
     return true;
 }
@@ -90,11 +111,14 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         }
 
         // Based on the flow's start and end times we set up a for loop to simulate the telemetry data
-        unsigned long currentTime = static_cast<unsigned long>(std::time(nullptr));
-
         if(flow.unixepochstart >= flow.unixepochend)
         {
             // Invalid flow, skip to the next one
+            continue;
+        }
+
+        if (flow.duration == 0)
+        {
             continue;
         }
 
@@ -104,15 +128,25 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         unsigned long stuckValue = sensingInstance->getRandomValueInRange(sensingInstance->_minBaseline, sensingInstance->_maxBaseline);
 
         // Calculate the number of iterations based on the flow's duration and the time range
-        unsigned long iterations = (flow.unixepochend - flow.unixepochstart) / flow.duration;
+        unsigned long iterations = 1;
+        if (flow.duration > 0)
+        {
+            iterations = (flow.unixepochend - flow.unixepochstart) / flow.duration;
+            if (iterations == 0)
+            {
+                iterations = 1;
+            }
+        }
+
+        unsigned long startTime = flow.unixepochstart;
 
         for (unsigned long t = flow.unixepochstart, ct = 0; t <= flow.unixepochend; t += flow.duration, ct++)
         {
             Telemetry telemetry;
-            telemetry.timestamp = static_cast<unsigned long>(std::time(nullptr));
             telemetry.scale = flow.scale; // Use the flow's scale
             telemetry.unitofmeasurement = std::string(flow.unitofmeasurement); // Use the flow's unit of measurement
-
+            telemetry.timestamp = t; // Use the flow's timestamp in dataset mode
+            
             // Value generation based on flow type
             switch (flow.type)
             {
@@ -152,17 +186,22 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Offset:
                 {
-                    // TBD: Implement offset logic based on the baseline value
+                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     break;
                 }
                 case Noise:
                 {
-                    // TBD: Implement offset logic based on the baseline value
+                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     break;
                 }
-                case Drift:
+                case DriftLinear:
                 {
-                    // TBD: Implement offset logic based on the baseline value
+                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    break;
+                }
+                case DriftStepped:
+                {
+                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     break;
                 }
                 default:
@@ -173,13 +212,21 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
             }
 
-            callback->onTelemetryReceived(telemetry);
 
-            std::this_thread::sleep_for(std::chrono::seconds(flow.duration)); // Simulate a delay based on the flow's duration
+            if(sensingInstance->_simulationMode == SimulationModeRealtime)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(flow.duration)); // Simulate a delay based on the flow's duration
+                callback->onTelemetryReceived(telemetry);
+           }
         }
 
         flowPos++;
+    }
 
+    // Once the flow is complete, check if the mode is dataset, if so, we can call the callback to indicate that the flow is complete
+    if(sensingInstance->_simulationMode == SimulationModeDataset)
+    {
+        callback->onTelemetryGenerationComplete(sensingInstance->_flowSetName);
     }
 }
 
