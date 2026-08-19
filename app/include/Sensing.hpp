@@ -8,6 +8,8 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+#include <random>
+#include <fstream>
 
 // Code style fulll Allman style
 // Excluded C++ features - exclude auto keyword, exclude lambdas

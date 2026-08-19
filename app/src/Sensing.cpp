@@ -97,6 +97,18 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
 
     size_t flowPos = 0;
 
+    std::ofstream telemetryFile;
+    if(sensingInstance->_simulationMode == SimulationModeDataset)
+    {
+        telemetryFile.open(sensingInstance->_flowSetName);
+        if (!telemetryFile.is_open())
+        {
+            std::cerr << "Failed to open telemetry file for writing: " << sensingInstance->_flowSetName << std::endl;
+            return;
+        }
+        telemetryFile << "Timestamp,Value,Scale,UnitOfMeasurement" << std::endl;
+    }
+
     for (Flow flow : sensingInstance->getFlows())
     {
         // If we are at flow position 1 and flow position 0 was BaseLine type, then we need to generate the statistics
@@ -212,12 +224,18 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
             }
 
-
             if(sensingInstance->_simulationMode == SimulationModeRealtime)
             {
                 std::this_thread::sleep_for(std::chrono::seconds(flow.duration)); // Simulate a delay based on the flow's duration
                 callback->onTelemetryReceived(telemetry);
-           }
+            }
+            else
+            {
+                if(sensingInstance->_simulationMode == SimulationModeDataset)
+                {
+                    telemetryFile << telemetry.timestamp << "," << telemetry.value << "," << telemetry.scale << "," << telemetry.unitofmeasurement << std::endl;
+                }
+            }
         }
 
         flowPos++;
@@ -226,6 +244,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
     // Once the flow is complete, check if the mode is dataset, if so, we can call the callback to indicate that the flow is complete
     if(sensingInstance->_simulationMode == SimulationModeDataset)
     {
+        telemetryFile.close();
         callback->onTelemetryGenerationComplete(sensingInstance->_flowSetName);
     }
 }
