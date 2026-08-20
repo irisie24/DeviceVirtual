@@ -125,7 +125,33 @@ std::vector<std::uint8_t> encodeStringPayload(const std::string& value)
 }
 }
 
+MqttClient::MqttClient()
+{
+    isConnected_ = false;
+    socketFd_ = -1;
+    qos_ = 1;
+    timeout_ = 30;
+    stopReader_ = false;
+    nextPacketId_ = 1;
+}
+
 MqttClient::MqttClient(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
+{
+    brokerAddress_ = brokerAddress;
+    port_ = port;
+    clientId_ = clientId;
+    username_ = username;
+    password_ = password;
+    callback_ = callback;
+    isConnected_ = false;
+    socketFd_ = -1;
+    qos_ = 1;
+    timeout_ = 30;
+    stopReader_ = false;
+    nextPacketId_ = 1;
+}
+
+void MqttClient::Initialize(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
 {
     brokerAddress_ = brokerAddress;
     port_ = port;

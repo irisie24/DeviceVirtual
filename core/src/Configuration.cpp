@@ -273,9 +273,8 @@ std::string Configuration::resolveConfigPath()
             }
         }
       
-        return configPath;
-
     #endif
+    return configPath;
 }
 
 std::list<std::string> Configuration::getSections()
