@@ -10,7 +10,7 @@ sensor_operating_max=105
 sensor_operating_min=-35
 sensor_geo_lat=2232
 sensor_geo_lon=8835
-distribution_algorithm=markov
+generation_model=markov
 
 [FLOW_1]
 type=baseline

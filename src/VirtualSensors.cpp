@@ -288,7 +288,7 @@ FlowType parseFlowType(const std::string& value)
         return DriftStepped;
     }
 
-    return Unknown;
+    return FlowUnknown;
 }
 
 unsigned long parseUnixEpoch(const std::string& value)
@@ -312,6 +312,52 @@ SimulationMode parseSimulationMode(const std::string& value)
     }
 
     return SimulationModeDataset;
+}
+
+GeneratorModelType parseGeneratorModelType(const std::string& value)
+{
+    if (value == "bernoulli")
+    {
+        return Bernoulli;
+    }
+    else if (value == "markov_two_state")
+    {
+        return MarkovTwoState;
+    }
+    else if (value == "semi_markov")
+    {
+        return SemiMarkov;
+    }
+    else if (value == "renewal_process")
+    {
+        return RenewalProcess;
+    }
+    else if (value == "poisson_onset")
+    {
+        return PoissonOnset;
+    }
+    else if (value == "negative_binomial_runs")
+    {
+        return NegativeBinomialRuns;
+    }
+    else if (value == "hidden_markov")
+    {
+        return HiddenMarkov;
+    }
+    else if (value == "beta_bernoulli_mixture")
+    {
+        return BetaBernoulliMixture;
+    }
+    else if (value == "block_segment")
+    {
+        return BlockSegment;
+    }
+    else if (value == "deterministic_pattern")
+    {
+        return DeterministicPattern;
+    }
+
+    return ModelUnknown;
 }
 
 std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory)
@@ -360,8 +406,10 @@ bool loadSensorDefinition(const std::filesystem::path& flowFile, Sensing& sensor
         bool repeatFlowSequence = flowConfiguration.getValue("General", "repeat_flow_sequence", "0") == "1";
         unsigned long flowSequenceEnd = parseUnixEpoch(flowConfiguration.getValue("General", "flow_sequence_end", "1970/01/01 00:00:00"));
         SimulationMode simulationMode = parseSimulationMode(flowConfiguration.getValue("General", "simulation_mode", "dataset"));
+        GeneratorModelType generatorModelType = parseGeneratorModelType(flowConfiguration.getValue("General", "generator_model_type", "deterministic"));
         sensor.setRepeatable(repeatFlowSequence, flowSequenceEnd);
         sensor.setSimulationMode(simulationMode);
+        sensor.setGeneratorModelType(generatorModelType);
     }
 
     std::list<std::string> sections = flowConfiguration.getSections();

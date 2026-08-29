@@ -1,4 +1,5 @@
 #include "Sensing.hpp"
+#include <vector>
 
 /*
  * Notes on simulation logic
@@ -10,12 +11,12 @@
  * A simulation run can have just the baseline flow. This is permitted and will generate telemetry data with no anamolies.
  * An anamoly flow can only be 2nd in sequence with the baseline flow at the start.
  */
-
 Sensing::Sensing()
 {
     _repeatable = false;
     _unixepochend = 0;
     _simulationMode = SimulationModeDataset;
+    _generatorModelType = ModelUnknown;
 }
 
 Sensing::~Sensing()
@@ -51,6 +52,16 @@ SimulationMode Sensing::getSimulationMode()
 void Sensing::setFlowSetName(const std::string& flowSetName)
 {
     _flowSetName = flowSetName + ".csv"; // Append .csv to the flow set name
+}
+
+void Sensing::setGeneratorModelType(GeneratorModelType generatorModelType)
+{
+    _generatorModelType = generatorModelType;
+}
+
+GeneratorModelType Sensing::getGeneratorModelType()
+{
+    return _generatorModelType;
 }
 
 bool Sensing::removeFlow(Flow flow)
@@ -139,14 +150,77 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         // For Stuck flow type, we need a value to stick to
         unsigned long stuckValue = sensingInstance->getRandomValueInRange(sensingInstance->_minBaseline, sensingInstance->_maxBaseline);
 
-        // Calculate the number of iterations based on the flow's duration and the time range
-        unsigned long iterations = 1;
-        if (flow.duration > 0)
+        // Calculate the total sample count based on time range and duration.
+        unsigned long sampleCount = ((flow.unixepochend - flow.unixepochstart) / flow.duration) + 1;
+        if (sampleCount == 0)
         {
-            iterations = (flow.unixepochend - flow.unixepochstart) / flow.duration;
-            if (iterations == 0)
+            sampleCount = 1;
+        }
+
+        // Distribution vector to set the elements which need to set with fault values
+        // We will set the vector with true using generation model algorithms
+        std::vector<bool> distibution(static_cast<size_t>(sampleCount), false);
+        std::fill(distibution.begin(), distibution.end(), false);
+
+        switch(sensingInstance->getGeneratorModelType())
+        {
+            case Bernoulli:
             {
-                iterations = 1;
+                // Implement Bernoulli generation model logic here
+                sensingInstance->SetWithBernoulliDistribution(distibution);
+                break;
+            }
+             case SemiMarkov:
+            {
+                sensingInstance->SetWithSemiMarkovDistribution(distibution);
+                break;
+            }
+            case RenewalProcess:
+            {
+                sensingInstance->SetWithRenewalProcessDistribution(distibution);
+                break;
+            }
+            case PoissonOnset:
+            {
+                sensingInstance->SetWithPoissonOnsetDistribution(distibution);
+                break;
+            }
+            case NegativeBinomialRuns:
+            {
+                sensingInstance->SetWithNegativeBinomialRunsDistribution(distibution);
+                break;
+            }
+            case HiddenMarkov:
+            {
+                sensingInstance->SetWithHiddenMarkovDistribution(distibution);
+                break;
+            }
+            case BetaBernoulliMixture:
+            {
+                sensingInstance->SetWithBetaBernoulliMixtureDistribution(distibution);
+                break;
+            }
+            case BlockSegment:
+            {
+                sensingInstance->SetWithBlockSegmentDistribution(distibution);
+                break;
+            }
+            case DeterministicPattern:
+            {
+                sensingInstance->SetWithDeterministicPatternDistribution(distibution);
+                break;
+            }
+            case MarkovTwoState:
+            {
+                sensingInstance->SetWithMarkovTwoStateDistribution(distibution);
+                break;
+            }
+            case ModelUnknown:
+            default:
+            {
+                // Unknown model fallback: use Bernoulli for compatibility.
+                sensingInstance->SetWithBernoulliDistribution(distibution);
+                break;
             }
         }
 
@@ -158,6 +232,11 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
             telemetry.scale = flow.scale; // Use the flow's scale
             telemetry.unitofmeasurement = std::string(flow.unitofmeasurement); // Use the flow's unit of measurement
             telemetry.timestamp = t; // Use the flow's timestamp in dataset mode
+            bool isAnomalySample = false;
+            if (ct < static_cast<unsigned long>(distibution.size()))
+            {
+                isAnomalySample = distibution[static_cast<size_t>(ct)];
+            }
             
             // Value generation based on flow type
             switch (flow.type)
@@ -175,8 +254,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Spikes:
                 {
-                    // If the count ct % iterations is 0, we generate a spike value, otherwise we generate a normal value
-                    if (ct % iterations == 0)
+                    if (isAnomalySample)
                     {
                         telemetry.value = sensingInstance->_maxBaseline + sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum); // Generate a spike value
                     }
@@ -188,34 +266,103 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Dead:
                 {
-                    telemetry.value = 0; // Simulate a dead flow with value 0
+                    if (isAnomalySample)
+                    {
+                        telemetry.value = 0; // Simulate a dead sample with value 0
+                    }
+                    else
+                    {
+                        telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    }
                     break;
                 }
                 case Stuck:
                 {
-                    telemetry.value = stuckValue; // Simulate a stuck flow with the same value
+                    if (isAnomalySample)
+                    {
+                        telemetry.value = stuckValue; // Simulate a stuck sample with the same value
+                    }
+                    else
+                    {
+                        telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    }
                     break;
                 }
                 case Offset:
                 {
-                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    if (isAnomalySample)
+                    {
+                        unsigned long offsetValue = ((flow.maximum - flow.minimum) / 4) + 1;
+                        telemetry.value = baseValue + offsetValue;
+                    }
+                    else
+                    {
+                        telemetry.value = baseValue;
+                    }
                     break;
                 }
                 case Noise:
                 {
-                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    if (isAnomalySample)
+                    {
+                        unsigned long jitter = ((flow.maximum - flow.minimum) / 10) + 1;
+                        unsigned long direction = static_cast<unsigned long>(rand() % 2);
+                        if (direction == 0)
+                        {
+                            telemetry.value = baseValue + jitter;
+                        }
+                        else
+                        {
+                            if (baseValue > jitter)
+                            {
+                                telemetry.value = baseValue - jitter;
+                            }
+                            else
+                            {
+                                telemetry.value = 0;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        telemetry.value = baseValue;
+                    }
                     break;
                 }
                 case DriftLinear:
                 {
-                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    if (isAnomalySample)
+                    {
+                        unsigned long maxDrift = ((flow.maximum - flow.minimum) / 3) + 1;
+                        unsigned long drift = (ct * maxDrift) / sampleCount;
+                        telemetry.value = baseValue + drift;
+                    }
+                    else
+                    {
+                        telemetry.value = baseValue;
+                    }
                     break;
                 }
                 case DriftStepped:
                 {
-                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    if (isAnomalySample)
+                    {
+                        unsigned long stepWindow = (sampleCount / 5) + 1;
+                        unsigned long stepIndex = ct / stepWindow;
+                        unsigned long stepSize = ((flow.maximum - flow.minimum) / 8) + 1;
+                        telemetry.value = baseValue + (stepIndex * stepSize);
+                    }
+                    else
+                    {
+                        telemetry.value = baseValue;
+                    }
                     break;
                 }
+                case FlowUnknown:
                 default:
                 {
                     // Default case, should not happen, but just in case
@@ -362,4 +509,222 @@ unsigned long Sensing::getRandomValueInRange(unsigned long min, unsigned long ma
         return min; // Return min if the range is invalid
     }
     return min + (rand() % (max - min + 1));
+}
+
+// Internal helper functions for Sensing class
+
+void Sensing::SetWithBernoulliDistribution(std::vector<bool> &set)
+{
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        *it = (rand() % 2) == 1;
+    }
+}
+
+void Sensing::SetWithMarkovTwoStateDistribution(std::vector<bool> &set)
+{
+    bool state = false;
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        unsigned long roll = static_cast<unsigned long>(rand() % 100);
+        if (state == false)
+        {
+            if (roll < 10)
+            {
+                state = true;
+            }
+        }
+        else
+        {
+            if (roll < 30)
+            {
+                state = false;
+            }
+        }
+        *it = state;
+    }
+}
+
+void Sensing::SetWithSemiMarkovDistribution(std::vector<bool> &set)
+{
+    bool state = false;
+    unsigned long remaining = 0;
+
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        if (remaining == 0)
+        {
+            state = !state;
+            if (state)
+            {
+                remaining = static_cast<unsigned long>((rand() % 6) + 2);
+            }
+            else
+            {
+                remaining = static_cast<unsigned long>((rand() % 12) + 3);
+            }
+        }
+
+        *it = state;
+        remaining--;
+    }
+}
+
+void Sensing::SetWithRenewalProcessDistribution(std::vector<bool> &set)
+{
+    unsigned long nextRenewal = static_cast<unsigned long>((rand() % 8) + 2);
+    unsigned long index = 0;
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        *it = false;
+        if (index == nextRenewal)
+        {
+            *it = true;
+            nextRenewal = index + static_cast<unsigned long>((rand() % 8) + 2);
+        }
+        index++;
+    }
+}
+
+void Sensing::SetWithPoissonOnsetDistribution(std::vector<bool> &set)
+{
+    unsigned long burstRemaining = 0;
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        if (burstRemaining == 0)
+        {
+            unsigned long onsetRoll = static_cast<unsigned long>(rand() % 100);
+            if (onsetRoll < 8)
+            {
+                burstRemaining = static_cast<unsigned long>((rand() % 4) + 1);
+            }
+        }
+
+        if (burstRemaining > 0)
+        {
+            *it = true;
+            burstRemaining--;
+        }
+        else
+        {
+            *it = false;
+        }
+    }
+}
+
+void Sensing::SetWithNegativeBinomialRunsDistribution(std::vector<bool> &set)
+{
+    unsigned long index = 0;
+    while (index < static_cast<unsigned long>(set.size()))
+    {
+        unsigned long gap = static_cast<unsigned long>((rand() % 10) + 1);
+        index += gap;
+        if (index >= static_cast<unsigned long>(set.size()))
+        {
+            break;
+        }
+
+        unsigned long runLength = static_cast<unsigned long>((rand() % 6) + 2);
+        unsigned long runEnd = index + runLength;
+        while (index < runEnd && index < static_cast<unsigned long>(set.size()))
+        {
+            set[static_cast<size_t>(index)] = true;
+            index++;
+        }
+    }
+}
+
+void Sensing::SetWithHiddenMarkovDistribution(std::vector<bool> &set)
+{
+    unsigned long hiddenState = 0;
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        unsigned long transitionRoll = static_cast<unsigned long>(rand() % 100);
+        if (hiddenState == 0)
+        {
+            if (transitionRoll < 12)
+            {
+                hiddenState = 1;
+            }
+        }
+        else
+        {
+            if (transitionRoll < 25)
+            {
+                hiddenState = 0;
+            }
+        }
+
+        if (hiddenState == 1)
+        {
+            *it = (rand() % 100) < 75;
+        }
+        else
+        {
+            *it = (rand() % 100) < 10;
+        }
+    }
+}
+
+void Sensing::SetWithBetaBernoulliMixtureDistribution(std::vector<bool> &set)
+{
+    unsigned long mixtureRoll = static_cast<unsigned long>(rand() % 100);
+    unsigned long pTrue = 15;
+    if (mixtureRoll < 30)
+    {
+        pTrue = 70;
+    }
+
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        unsigned long roll = static_cast<unsigned long>(rand() % 100);
+        *it = (roll < pTrue);
+    }
+}
+
+void Sensing::SetWithBlockSegmentDistribution(std::vector<bool> &set)
+{
+    if (set.empty())
+    {
+        return;
+    }
+
+    unsigned long size = static_cast<unsigned long>(set.size());
+    unsigned long minBlock = (size / 10) + 1;
+    unsigned long maxBlock = (size / 3) + 1;
+    unsigned long blockLength = minBlock;
+    if (maxBlock > minBlock)
+    {
+        blockLength = minBlock + static_cast<unsigned long>(rand() % (maxBlock - minBlock + 1));
+    }
+
+    if (blockLength > size)
+    {
+        blockLength = size;
+    }
+
+    unsigned long start = 0;
+    if (size > blockLength)
+    {
+        start = static_cast<unsigned long>(rand() % (size - blockLength + 1));
+    }
+
+    for (unsigned long i = start; i < (start + blockLength); ++i)
+    {
+        set[static_cast<size_t>(i)] = true;
+    }
+}
+
+void Sensing::SetWithDeterministicPatternDistribution(std::vector<bool> &set)
+{
+    unsigned long period = 6;
+    unsigned long width = 2;
+    unsigned long index = 0;
+
+    for (std::vector<bool>::iterator it = set.begin(); it != set.end(); ++it)
+    {
+        unsigned long inPeriod = index % period;
+        *it = (inPeriod < width);
+        index++;
+    }
 }

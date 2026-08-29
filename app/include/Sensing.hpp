@@ -10,6 +10,7 @@
 #include <mutex>
 #include <random>
 #include <fstream>
+#include <vector>
 
 // Code style fulll Allman style
 // Excluded C++ features - exclude auto keyword, exclude lambdas
@@ -34,8 +35,24 @@ typedef enum FlowType
     Noise,
     DriftLinear,
     DriftStepped,
-    Unknown   
+    FlowUnknown   
 }FlowType;
+
+typedef enum GeneratorModelType
+{
+    Bernoulli,
+    MarkovTwoState,
+    SemiMarkov,
+    RenewalProcess,
+    PoissonOnset,
+    NegativeBinomialRuns,
+    HiddenMarkov,
+    BetaBernoulliMixture,
+    BlockSegment,
+    DeterministicPattern,
+    ModelUnknown
+
+}GeneratorModelType;
 
 typedef struct Flow
 {
@@ -76,9 +93,22 @@ public:
     void setSimulationMode(SimulationMode simulationMode);
     void setFlowSetName(const std::string& flowSetName);
     SimulationMode getSimulationMode();
+    void setGeneratorModelType(GeneratorModelType generatorModelType);
+    GeneratorModelType getGeneratorModelType();
     bool startSimulation(SensorCallback* callback);
 private:
     unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
+
+    void SetWithBernoulliDistribution(std::vector<bool> &set);
+    void SetWithMarkovTwoStateDistribution(std::vector<bool> &set);
+    void SetWithSemiMarkovDistribution(std::vector<bool> &set);
+    void SetWithRenewalProcessDistribution(std::vector<bool> &set);
+    void SetWithPoissonOnsetDistribution(std::vector<bool> &set);
+    void SetWithNegativeBinomialRunsDistribution(std::vector<bool> &set);
+    void SetWithHiddenMarkovDistribution(std::vector<bool> &set);
+    void SetWithBetaBernoulliMixtureDistribution(std::vector<bool> &set);
+    void SetWithBlockSegmentDistribution(std::vector<bool> &set);
+    void SetWithDeterministicPatternDistribution(std::vector<bool> &set);
 
     void computeMaxOfBaseline();
     void computeMinOfBaseline();
@@ -97,6 +127,7 @@ private:
     unsigned long _medianBaseline;
     unsigned long _averageBaseline;
     std::string _flowSetName;
+    GeneratorModelType _generatorModelType;
 };
 
 
