@@ -7,8 +7,6 @@
 #include <thread>
 #include <chrono>
 #include <sstream>
-#include <ctime>
-#include <cstring>
 #include "Mqtt.hpp"
 #include "Application.hpp"
 #include "SignalHandler.hpp"
@@ -126,12 +124,7 @@ private:
     std::string _publishTopic;
 };
 
-unsigned long parseUnsignedLong(const std::string& value);
-FlowType parseFlowType(const std::string& value);
-unsigned long parseUnixEpoch(const std::string& value);
-SimulationMode parseSimulationMode(const std::string& value);
 std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory);
-bool loadSensorDefinition(const std::filesystem::path& flowFile, Sensing& sensor);
 
 Configuration appConfig;
 MqttClient client;
@@ -165,7 +158,7 @@ int main(int argc, char* argv[])
     {
         Sensing sensor;
 
-        if (loadSensorDefinition(*it, sensor))
+        if (sensor.loadSensorDefinition(*it))
         {
             // Set the flow set name based on the filename (without extension)
             std::string flowSetName = it->stem().string();
@@ -241,125 +234,6 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-unsigned long parseUnsignedLong(const std::string& value)
-{
-    std::stringstream stream(value);
-    unsigned long result = 0;
-    stream >> result;
-    return result;
-}
-
-FlowType parseFlowType(const std::string& value)
-{
-    if (value == "baseline")
-    {
-        return BaseLine;
-    }
-    if (value == "normal")
-    {
-        return Normal;
-    }
-    if (value == "spikes")
-    {
-        return Spikes;
-    }
-    if (value == "dead")
-    {
-        return Dead;
-    }
-    if (value == "stuck")
-    {
-        return Stuck;
-    }
-    if (value == "offset")
-    {
-        return Offset;
-    }
-    if (value == "noise")
-    {
-        return Noise;
-    }
-    if (value == "driftlinear")
-    {
-        return DriftLinear;
-    }
-    if (value == "driftstepped")
-    {
-        return DriftStepped;
-    }
-
-    return FlowUnknown;
-}
-
-unsigned long parseUnixEpoch(const std::string& value)
-{
-    std::tm timeInfo = {};
-    std::istringstream stream(value);
-    stream >> std::get_time(&timeInfo, "%Y/%m/%d %H:%M:%S");
-    if (stream.fail())
-    {
-        return 0;
-    }
-
-    return static_cast<unsigned long>(std::mktime(&timeInfo));
-}
-
-SimulationMode parseSimulationMode(const std::string& value)
-{
-    if (value == "realtime")
-    {
-        return SimulationModeRealtime;
-    }
-
-    return SimulationModeDataset;
-}
-
-GeneratorModelType parseGeneratorModelType(const std::string& value)
-{
-    if (value == "bernoulli")
-    {
-        return Bernoulli;
-    }
-    else if (value == "markov_two_state")
-    {
-        return MarkovTwoState;
-    }
-    else if (value == "semi_markov")
-    {
-        return SemiMarkov;
-    }
-    else if (value == "renewal_process")
-    {
-        return RenewalProcess;
-    }
-    else if (value == "poisson_onset")
-    {
-        return PoissonOnset;
-    }
-    else if (value == "negative_binomial_runs")
-    {
-        return NegativeBinomialRuns;
-    }
-    else if (value == "hidden_markov")
-    {
-        return HiddenMarkov;
-    }
-    else if (value == "beta_bernoulli_mixture")
-    {
-        return BetaBernoulliMixture;
-    }
-    else if (value == "block_segment")
-    {
-        return BlockSegment;
-    }
-    else if (value == "deterministic_pattern")
-    {
-        return DeterministicPattern;
-    }
-
-    return ModelUnknown;
-}
-
 std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory)
 {
     std::list<std::filesystem::path> flowFiles;
@@ -392,51 +266,3 @@ std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDire
     return flowFiles;
 }
 
-bool loadSensorDefinition(const std::filesystem::path& flowFile, Sensing& sensor)
-{
-    Configuration flowConfiguration;
-
-    if (!flowConfiguration.loadCustomConfiguration(flowFile.string()))
-    {
-        return false;
-    }
-
-    if (flowConfiguration.isSection("General"))
-    {
-        bool repeatFlowSequence = flowConfiguration.getValue("General", "repeat_flow_sequence", "0") == "1";
-        unsigned long flowSequenceEnd = parseUnixEpoch(flowConfiguration.getValue("General", "flow_sequence_end", "1970/01/01 00:00:00"));
-        SimulationMode simulationMode = parseSimulationMode(flowConfiguration.getValue("General", "simulation_mode", "dataset"));
-        GeneratorModelType generatorModelType = parseGeneratorModelType(flowConfiguration.getValue("General", "generator_model_type", "deterministic"));
-        sensor.setRepeatable(repeatFlowSequence, flowSequenceEnd);
-        sensor.setSimulationMode(simulationMode);
-        sensor.setGeneratorModelType(generatorModelType);
-    }
-
-    std::list<std::string> sections = flowConfiguration.getSections();
-    for (const std::string& section : sections)
-    {
-        if (section.compare(0, 5, "FLOW_") != 0)
-        {
-            continue;
-        }
-
-        Flow flow;
-        std::memset(&flow, 0, sizeof(flow));
-
-        flow.type = parseFlowType(flowConfiguration.getValue(section, "type", "baseline"));
-        flow.scale = parseUnsignedLong(flowConfiguration.getValue(section, "scale", "1"));
-        flow.minimum = parseUnsignedLong(flowConfiguration.getValue(section, "min", "0"));
-        flow.maximum = parseUnsignedLong(flowConfiguration.getValue(section, "max", "100"));
-        flow.duration = parseUnsignedLong(flowConfiguration.getValue(section, "intervalsecs", "300"));
-        flow.unixepochstart = parseUnixEpoch(flowConfiguration.getValue(section, "start", "1970/01/01 00:00:00"));
-        flow.unixepochend = parseUnixEpoch(flowConfiguration.getValue(section, "end", "1970/01/01 00:00:00"));
-
-        std::string unit = flowConfiguration.getValue(section, "uom", "NA");
-        std::strncpy(flow.unitofmeasurement, unit.c_str(), sizeof(flow.unitofmeasurement) - 1);
-        flow.unitofmeasurement[sizeof(flow.unitofmeasurement) - 1] = '\0';
-
-        sensor.addFlow(flow);
-    }
-
-    return true;
-}

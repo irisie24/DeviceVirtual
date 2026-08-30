@@ -1,4 +1,5 @@
 [General]
+device_id=12345678
 sensor_name=Thermal Outdoors
 make=A
 model=B

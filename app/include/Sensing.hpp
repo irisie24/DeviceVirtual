@@ -11,6 +11,7 @@
 #include <random>
 #include <fstream>
 #include <vector>
+#include <filesystem>
 
 // Code style fulll Allman style
 // Excluded C++ features - exclude auto keyword, exclude lambdas
@@ -95,6 +96,7 @@ public:
     SimulationMode getSimulationMode();
     void setGeneratorModelType(GeneratorModelType generatorModelType);
     GeneratorModelType getGeneratorModelType();
+    bool loadSensorDefinition(const std::filesystem::path& flowFile);
     bool startSimulation(SensorCallback* callback);
 private:
     unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
