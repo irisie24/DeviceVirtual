@@ -7,6 +7,10 @@
 #include <thread>
 #include <chrono>
 #include "Mqtt.hpp"
+#include "Application.hpp"
+#include "SignalHandler.hpp"
+#include "Logger.hpp"
+#include "Configuration.hpp"
 
 class TestMqttCallback : public MqttCallback
 {
@@ -27,9 +31,61 @@ public:
     }
 };
 
+class VirtualActuatorSignalHandler : public SignalCallback
+{
+    public:
+        void suspend() override
+        {
+            writeLog("Application suspended.", LogLevel::Info);
+        }
+
+        void resume() override
+        {
+            writeLog("Application resumed.", LogLevel::Info);
+        }
+
+        void shutdown() override
+        {
+            writeLog("Application shutting down.", LogLevel::Info);
+        }
+
+        void alarm() override
+        {
+            writeLog("Alarm signal received.", LogLevel::Info);
+        }
+
+        void reset() override
+        {
+            writeLog("Reset signal received.", LogLevel::Info);
+        }
+
+        void childExit() override
+        {
+            writeLog("Child process exited.", LogLevel::Info);
+        }
+
+        void userdefined1() override
+        {
+            writeLog("User-defined signal 1 received.", LogLevel::Info);
+        }
+
+        void userdefined2() override
+        {
+            writeLog("User-defined signal 2 received.", LogLevel::Info);
+        }
+};
+
+Configuration appConfig;
+MqttClient client;
+SignalHandler signalHandler;
+
+TestMqttCallback callback;
+VirtualActuatorSignalHandler sgcallback;
+
 int main(int argc, char* argv[])
 {
-    TestMqttCallback callback;
+    signalHandler.registerCallbackClient(&sgcallback);
+
     MqttClient client("broker.emqx.io", 1883, "DeviceVirtualClient", "", "", &callback);
 
     std::cout << "Connecting to EMQX broker..." << std::endl;
