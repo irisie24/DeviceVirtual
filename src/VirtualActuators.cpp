@@ -47,10 +47,10 @@ public:
     }
 };
 
-class TestMqttCallback : public MqttCallback
+class SensingMqttCallback : public MqttCallback
 {
 public:
-    TestMqttCallback()
+    SensingMqttCallback()
         : _actuators(nullptr)
         , _executionCallback(nullptr)
     {
@@ -157,7 +157,7 @@ Configuration appConfig;
 MqttClient client;
 SignalHandler signalHandler;
 
-TestMqttCallback callback;
+SensingMqttCallback callback;
 VirtualActuatorSignalHandler sgcallback;
 ActuationExecutionCallback actuationExecutionCallback;
 

@@ -11,6 +11,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 
 constexpr std::uint8_t kConnect = 0x10;
 constexpr std::uint8_t kConnAck = 0x20;
@@ -47,6 +48,7 @@ bool writeSocket(int socketFd, const std::vector<std::uint8_t>& data)
         const auto sent = send(socketFd, data.data() + offset, data.size() - offset, 0);
         if (sent < 0)
         {
+            std::cerr << "MqttPosix: send() failed: " << std::strerror(errno) << "\n";
             if (errno == EINTR)
             {
                 continue;
@@ -74,6 +76,14 @@ bool readExactlyFromSocket(int socketFd, std::vector<std::uint8_t>& buffer, std:
         const auto received = recv(socketFd, chunk.data(), toRead, 0);
         if (received <= 0)
         {
+            if (received == 0)
+            {
+                std::cerr << "MqttPosix: recv() returned 0 (connection closed)\n";
+            }
+            else
+            {
+                std::cerr << "MqttPosix: recv() failed: " << std::strerror(errno) << "\n";
+            }
             if (received < 0 && errno == EINTR)
             {
                 continue;
@@ -169,6 +179,7 @@ void MqttClient::readerLoop()
             std::uint8_t byte = 0;
             if (recv(socketFd_, &byte, 1, 0) <= 0)
             {
+                std::cerr << "MqttPosix: failed reading remaining length byte: " << std::strerror(errno) << "\n";
                 return;
             }
 

@@ -9,66 +9,17 @@
 #include <sstream>
 #include <string>
 
-namespace
-{
-std::mutex& GetLoggerMutex()
-{
-    static std::mutex loggerMutex;
-    return loggerMutex;
-}
-
-std::string GetTimestampString()
-{
-    const std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    const std::time_t time = std::chrono::system_clock::to_time_t(now);
-    std::tm localTime{};
-
-#if defined(_WIN32) || defined(WIN32)
-    localtime_s(&localTime, &time);
+#ifdef _WIN32
+#include <windows.h>
 #else
-    localtime_r(&time, &localTime);
+#include <unistd.h>
 #endif
 
-    char buffer[32] = {};
-    std::strftime(buffer, sizeof(buffer), "%Y.%m.%d-%H.%M.%S", &localTime);
-    return std::string(buffer);
-}
-
-std::string GetLevelString(LogLevel level)
-{
-    switch (level)
-    {
-        case LogLevel::Info:
-            return "INFO";
-        case LogLevel::Warning:
-            return "WARN";
-        case LogLevel::Error:
-            return "ERROR";
-        case LogLevel::Critical:
-            return "CRITICAL";
-        default:
-            return "INFO";
-    }
-}
-
-std::string GetShortFunctionName(const std::string& functionName)
-{
-    std::string result = functionName;
-    const std::string::size_type begin = result.find_last_of(':');
-    if (begin != std::string::npos)
-    {
-        result = result.substr(begin + 1);
-    }
-
-    const std::string::size_type paren = result.find('(');
-    if (paren != std::string::npos)
-    {
-        result = result.substr(0, paren);
-    }
-
-    return result;
-}
-}
+std::mutex& GetLoggerMutex();
+std::string GetTimestampString();
+std::string GetLevelString(LogLevel level);
+std::string GetShortFunctionName(const std::string& functionName);
+std::string resolveLogPath();
 
 Logger objLogger;
 
@@ -115,19 +66,11 @@ void Logger::startLogging(LogFileMode fmode)
 {
     _FileMode = fmode;
 
-    std::filesystem::path logDirectory = std::filesystem::current_path();
-    if (_LogDirectory.empty())
-    {
-        logDirectory /= "logs";
-    }
-    else
-    {
-        logDirectory = std::filesystem::path(_LogDirectory);
-    }
+    std::filesystem::path logDirectory = resolveLogPath();
+	_LogDirectory = logDirectory.string();
 
     std::filesystem::create_directories(logDirectory);
 
-    _LogDirectory = logDirectory.string();
     _LogFilename = (_LogDirectory + "/" + _ModuleName + ".log");
 
     _LogFile.open(_LogFilename, std::ios::out | (fmode == LogFileMode::Append ? std::ios::app : std::ios::trunc));
@@ -197,7 +140,9 @@ void Logger::setModuleName(std::string mname)
 
 void Logger::setLogFileSize(int flsz)
 {
-    _LogFileSize = std::max(1, flsz);
+    // Use parentheses around std::max to avoid collisions with a possible
+    // macro named 'max' (commonly defined by <windows.h> on Windows).
+    _LogFileSize = (std::max)(1, flsz);
 }
 
 void Logger::setLogDirectory(std::string dirpath)
@@ -240,4 +185,126 @@ void Logger::setRemoteHost(std::string remoteHost)
     (void)remoteHost;
 }
 
+std::mutex& GetLoggerMutex()
+{
+    static std::mutex loggerMutex;
+    return loggerMutex;
+}
 
+std::string GetTimestampString()
+{
+    const std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+
+#if defined(_WIN32) || defined(WIN32)
+    localtime_s(&localTime, &time);
+#else
+    localtime_r(&time, &localTime);
+#endif
+
+    char buffer[32] = {};
+    std::strftime(buffer, sizeof(buffer), "%Y.%m.%d-%H.%M.%S", &localTime);
+    return std::string(buffer);
+}
+
+std::string GetLevelString(LogLevel level)
+{
+    switch (level)
+    {
+    case LogLevel::Info:
+        return "INFO";
+    case LogLevel::Warning:
+        return "WARN";
+    case LogLevel::Error:
+        return "ERROR";
+    case LogLevel::Critical:
+        return "CRITICAL";
+    default:
+        return "INFO";
+    }
+}
+
+std::string GetShortFunctionName(const std::string& functionName)
+{
+    std::string result = functionName;
+    const std::string::size_type begin = result.find_last_of(':');
+    if (begin != std::string::npos)
+    {
+        result = result.substr(begin + 1);
+    }
+
+    const std::string::size_type paren = result.find('(');
+    if (paren != std::string::npos)
+    {
+        result = result.substr(0, paren);
+    }
+
+    return result;
+}
+
+std::string resolveLogPath()
+{
+    std::string _AppName = "";
+    char exePath[4097] = { 0 };
+    std::string logPath = "";
+
+#ifdef _WIN32
+    const char* user = std::getenv("USERNAME");
+    const char* localAppData = std::getenv("LOCALAPPDATA");
+    GetModuleFileNameA(NULL, exePath, sizeof(exePath));
+    _AppName = std::filesystem::path(exePath).stem().string();
+
+    if (localAppData && user)
+    {
+        logPath = std::filesystem::path(localAppData).generic_string() + "/" + _AppName + "/log";
+    }
+    else
+    {
+        logPath = (std::filesystem::path("C:/Users/") / user / "AppData/Local" / _AppName).generic_string() + "/log";
+    }
+
+#else // POSIX
+    uid_t uid = geteuid();
+    const char* user = std::getenv("USER");
+    const char* home = std::getenv("HOME");
+
+    ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+    if (len != -1)
+    {
+        exePath[len] = '\0';
+        _AppName = std::filesystem::path(exePath).stem().string();
+    }
+
+    if (uid == 0)
+    { // root
+        logPath = "/var/log/";
+    }
+    else
+    { // user
+        if (home && user)
+        {
+            std::filesystem::path userPath = std::filesystem::path(home) / ".local" / "applications" / _AppName;
+            if (!std::filesystem::exists(userPath))
+            {
+                std::filesystem::create_directories(userPath);
+            }
+            logPath = userPath.generic_string();
+        }
+        else
+        {
+            if (home && !user)
+            {
+                std::filesystem::path xdgPath = std::filesystem::path(home) / ".local" / _AppName;
+                if (!std::filesystem::exists(xdgPath))
+                {
+                    std::filesystem::create_directories(xdgPath);
+                }
+                logPath = xdgPath.generic_string();
+            }
+        }
+    }
+
+#endif
+    return logPath;
+}

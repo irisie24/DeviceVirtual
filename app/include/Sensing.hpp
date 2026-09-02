@@ -65,6 +65,7 @@ typedef struct Flow
     unsigned long minimum;
     unsigned long maximum;
     char unitofmeasurement[17];
+	std::string datasetfilename;
 }Flow;
 
 typedef struct Telemetry
@@ -78,8 +79,9 @@ typedef struct Telemetry
 class SensorCallback
 {
 public:
-    virtual void onTelemetryReceived(const Telemetry& telemetry) = 0;
-    virtual void onTelemetryGenerationComplete(const std::string& telemetryfilename) = 0;
+    virtual void onTelemetryReceived(const std::string& deviceid, const Telemetry& telemetry, SimulationMode mode) = 0;
+    virtual void onTelemetryGenerationComplete(const std::string& deviceid, const std::string& telemetryfilename) = 0;
+    virtual void onMessage(const std::string& deviceid, const std::string& msg) = 0;
 };
 
 class Sensing
@@ -130,6 +132,7 @@ private:
     unsigned long _averageBaseline;
     std::string _flowSetName;
     GeneratorModelType _generatorModelType;
+    std::string _deviceId;
 };
 
 

@@ -14,7 +14,7 @@
 #include "Configuration.hpp"
 #include "Sensing.hpp"
 
-class TestMqttCallback : public MqttCallback
+class SensingMqttCallback : public MqttCallback
 {
 public:
     void onMessageReceived(const std::string& topic, const std::string& message) override
@@ -49,6 +49,8 @@ class VirtualSensorSignalHandler : public SignalCallback
         void shutdown() override
         {
             writeLog("Application shutting down.", LogLevel::Info);
+			client.disconnect();
+			exit(0);
         }
 
         void alarm() override
@@ -95,13 +97,19 @@ public:
         _publishTopic = publishTopic;
     }
 
-    void onTelemetryReceived(const Telemetry& telemetry) override
+    void onTelemetryReceived(const std::string& deviceid, const Telemetry& telemetry, SimulationMode mode) override
     {
-        std::cout << "Telemetry received - Timestamp: " << telemetry.timestamp
+        std::cout << "Telemetry received - Device ID: " << deviceid
+                  << ", Timestamp: " << telemetry.timestamp
                   << ", Value: " << telemetry.value
                   << ", Scale: " << telemetry.scale
                   << ", Unit: " << telemetry.unitofmeasurement
                   << std::endl;
+
+		if (mode == SimulationModeDataset)
+		{
+			return;
+		}
 
         if (_client != nullptr && !_publishTopic.empty())
         {
@@ -110,13 +118,18 @@ public:
                     << ",value=" << telemetry.value
                     << ",scale=" << telemetry.scale
                     << ",unit=" << telemetry.unitofmeasurement;
-            _client->publish(_publishTopic, message.str());
+            _client->publish(_publishTopic + deviceid, message.str());
         }
     }
 
-    void onTelemetryGenerationComplete(const std::string& telemetryfilename) override
+    void onTelemetryGenerationComplete(const std::string& deviceid, const std::string& telemetryfilename) override
     {
-        std::cout << "Telemetry generation complete - File: " << telemetryfilename << std::endl;
+        writeLogNormal("Telemetry generation complete - Device ID: " + deviceid + ", File: " + telemetryfilename);
+    }
+
+    void onMessage(const std::string& deviceid, const std::string& msg) override
+    {
+        writeLogNormal("Device ID: " + deviceid + ", Message: " + msg);
     }
 
 private:
@@ -126,16 +139,15 @@ private:
 
 std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory);
 
-Configuration appConfig;
-MqttClient client;
-SignalHandler signalHandler;
-
-TestMqttCallback callback;
+SensingMqttCallback callback;
 TelemetryCallback scallback;
 VirtualSensorSignalHandler sgcallback;
 
 int main(int argc, char* argv[])
 {    
+    loggerRefPtr = Logger::GetInstance();
+	loggerRefPtr->startLogging(LogFileMode::Append);
+
     signalHandler.registerCallbackClient(&sgcallback);
 
     appConfig.setFileName("VirtualSensors.ini");
@@ -188,21 +200,20 @@ int main(int argc, char* argv[])
         }
     }
 
-
     // Parse the configuration values for MQTT broker address, port, client ID, username, and password
     std::string brokerAddress = appConfig.getValue("MQTT", "BrokerAddress", "broker.emqx.io");
     int port = std::stoi(appConfig.getValue("MQTT", "Port", "1883"));
     std::string clientId = appConfig.getValue("MQTT", "ClientId", "DeviceVirtualClient");
     std::string username = appConfig.getValue("MQTT", "Username", "");
     std::string password = appConfig.getValue("MQTT", "Password", "");
-    std::string mqttPublishTopic = appConfig.getValue("MQTT", "publishtopic", "devicevirtual/telemetry");
-    std::string mqttSubscribeTopic = appConfig.getValue("MQTT", "subscribetopic", "devicevirtual/test");
+    std::string mqttPublishTopic = appConfig.getValue("MQTT", "publishtopic", "devicevirtual/sensing/");
+    std::string mqttSubscribeTopic = appConfig.getValue("MQTT", "subscribetopic", "devicevirtual/actuation/");
 
     client.Initialize(brokerAddress, port, clientId, username, password, &callback);
     scallback.setClient(&client);
     scallback.setPublishTopic(mqttPublishTopic);
 
-    std::cout << "Connecting to EMQX broker..." << std::endl;
+    std::cout << "Connecting to broker..." << std::endl;
     client.connect(1, 10);
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -216,13 +227,18 @@ int main(int argc, char* argv[])
         it->startSimulation(&scallback);
     }
 
+	std::cout << "Press Ctrl+C to exit the application." << std::endl;
+
+    for (int i = 0; i < 10; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    /*
     if (hasRealtimeSimulation)
     {
         std::cout << "Waiting for MQTT activity..." << std::endl;
-        for (int i = 0; i < 10; ++i)
-        {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
+
     }
     else
     {
@@ -231,6 +247,8 @@ int main(int argc, char* argv[])
 
     client.disconnect();
     std::cout << "MQTT test finished." << std::endl;
+    */
+
     return 0;
 }
 

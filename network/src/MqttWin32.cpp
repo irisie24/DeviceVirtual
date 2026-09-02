@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <mutex>
 #include <stdexcept>
+#include <iostream>
 
 namespace
 {
@@ -65,6 +66,7 @@ bool writeSocket(SOCKET socketFd, const std::vector<std::uint8_t>& data)
         if (sent == SOCKET_ERROR)
         {
             const int errorCode = WSAGetLastError();
+            std::cerr << "MqttWin32: send() failed: " << errorCode << "\n";
             if (errorCode == WSAEINTR)
             {
                 continue;
@@ -96,6 +98,7 @@ bool readExactlyFromSocket(SOCKET socketFd, std::vector<std::uint8_t>& buffer, s
         if (received == SOCKET_ERROR)
         {
             const int errorCode = WSAGetLastError();
+            std::cerr << "MqttWin32: recv() failed: " << errorCode << "\n";
             if (errorCode == WSAEINTR)
             {
                 continue;
@@ -105,6 +108,7 @@ bool readExactlyFromSocket(SOCKET socketFd, std::vector<std::uint8_t>& buffer, s
 
         if (received == 0)
         {
+            std::cerr << "MqttWin32: recv() returned 0 (connection closed)\n";
             return false;
         }
 
@@ -196,6 +200,8 @@ void MqttClient::readerLoop()
             std::uint8_t byte = 0;
             if (recv(static_cast<SOCKET>(socketFd_), reinterpret_cast<char*>(&byte), 1, 0) <= 0)
             {
+                const int err = WSAGetLastError();
+                std::cerr << "MqttWin32: failed reading remaining length byte: " << err << "\n";
                 return;
             }
 

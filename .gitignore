@@ -71,4 +71,5 @@ temp/
 build/
 
 .vscode/
-
+.vs/
+out/
