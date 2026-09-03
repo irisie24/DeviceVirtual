@@ -4,8 +4,9 @@ sensor_name=Thermal Outdoors
 make=A
 model=B
 num_flows=8
-repeat_flow_sequence=1
+repeat_flow_sequence=0
 flow_sequence_end=2026/12/31 23:59:59
+;realtime and dataset
 simulation_mode=dataset
 sensor_operating_max=105
 sensor_operating_min=-35
@@ -20,7 +21,7 @@ min=18
 uom=celsius
 scale=10
 start=2026/05/01 00:00:00
-end=2026/05/31 23:59:59
+end=2026/05/01 23:59:59
 intervalsecs=300
 
 [FLOW_2]
@@ -29,8 +30,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/01 00:00:00
-end=2026/06/05 23:59:59
+start=2026/05/02 00:00:00
+end=2026/05/02 23:59:59
 intervalsecs=300
 
 [FLOW_3]
@@ -39,8 +40,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/06 00:00:00
-end=2026/06/10 23:59:59
+start=2026/05/03 00:00:00
+end=2026/05/03 23:59:59
 intervalsecs=300
 
 [FLOW_4]
@@ -49,8 +50,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/11 00:00:00
-end=2026/06/15 23:59:59
+start=2026/05/04 00:00:00
+end=2026/05/04 23:59:59
 intervalsecs=300
 
 [FLOW_5]
@@ -59,8 +60,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/16 00:00:00
-end=2026/06/20 23:59:59
+start=2026/05/05 00:00:00
+end=2026/05/05 23:59:59
 intervalsecs=300
 
 [FLOW_6]
@@ -69,8 +70,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/21 00:00:00
-end=2026/06/25 23:59:59
+start=2026/05/06 00:00:00
+end=2026/05/06 23:59:59
 intervalsecs=300
 
 [FLOW_7]
@@ -79,8 +80,8 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/06/26 00:00:00
-end=2026/06/30 23:59:59
+start=2026/05/07 00:00:00
+end=2026/05/07 23:59:59
 intervalsecs=300
 
 [FLOW_8]
@@ -89,6 +90,6 @@ max=55
 min=18
 uom=celsius
 scale=10
-start=2026/07/01 00:00:00
-end=2026/07/05 23:59:59
+start=2026/05/08 00:00:00
+end=2026/05/08 23:59:59
 intervalsecs=300

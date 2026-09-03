@@ -11,6 +11,7 @@
 std::string epochToDateTime(const unsigned long epoch);
 unsigned long parseUnsignedLong(const std::string& value);
 FlowType parseFlowType(const std::string& value);
+std::string flowTypeToString(FlowType flowType);
 unsigned long parseUnixEpoch(const std::string& value);
 SimulationMode parseSimulationMode(const std::string& value);
 GeneratorModelType parseGeneratorModelType(const std::string& value);
@@ -306,14 +307,17 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 filename = basePath.stem().string(); // use stem, e.g., xyz from xyz.csv
             }
 
-            int idx = 1;
             std::filesystem::path candidate;
-            do
-            {
+            //int idx = 1;
+            //do
+            //{
                 // Build name like: xyz.flow1.csv (if filename is "xyz.flow") or xyz1.csv (if filename is "xyz")
-                candidate = parent / (filename + "_flow_" + std::to_string(idx) + std::string(".csv"));
-                idx++;
-            } while (std::filesystem::exists(candidate));
+            //    candidate = parent / (filename + "_flow_" + std::to_string(idx) + std::string(".csv"));
+            //    idx++;
+            //} while (std::filesystem::exists(candidate));
+
+            candidate = parent / (filename + "_flow_" + flowTypeToString(flow.type) + std::string(".csv"));
+
 
             perFlowFilename = candidate.generic_string();
             perFlowFile.open(perFlowFilename);
@@ -968,4 +972,31 @@ GeneratorModelType parseGeneratorModelType(const std::string& value)
     }
 
     return ModelUnknown;
+}
+
+std::string flowTypeToString(FlowType flowType)
+{
+	switch (flowType)
+	{
+	case BaseLine:
+		return "baseline";
+	case Normal:
+		return "normal";
+	case Spikes:
+		return "spikes";
+	case Dead:
+		return "dead";
+	case Stuck:
+		return "stuck";
+	case Offset:
+		return "offset";
+	case Noise:
+		return "noise";
+	case DriftLinear:
+		return "driftlinear";
+	case DriftStepped:
+		return "driftstepped";
+	default:
+		return "unknown";
+	}
 }

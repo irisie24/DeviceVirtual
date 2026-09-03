@@ -229,25 +229,18 @@ int main(int argc, char* argv[])
 
 	std::cout << "Press Ctrl+C to exit the application." << std::endl;
 
-    for (int i = 0; i < 10; ++i)
+    // Keep the main thread alive until the user requests shutdown (Ctrl+C).
+    // Previous implementation slept for a fixed 10 seconds which could let
+    // the program exit while background threads (including the MQTT reader)
+    // were still active, causing socket closes and WSAENOTSOCK/WSAEINTR.
+    while (true)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    /*
-    if (hasRealtimeSimulation)
-    {
-        std::cout << "Waiting for MQTT activity..." << std::endl;
-
-    }
-    else
-    {
-        std::cout << "MQTT activity completed in dataset mode." << std::endl;
-    }
-
     client.disconnect();
     std::cout << "MQTT test finished." << std::endl;
-    */
+    
 
     return 0;
 }
