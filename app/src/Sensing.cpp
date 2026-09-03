@@ -213,6 +213,10 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
             sampleCount = 1;
         }
 
+        unsigned long offsetValue = 0;
+        // Offset will be = median + plus or minus decided by a random bool + random percent of the median value
+        offsetValue = (sensingInstance->_medianBaseline + sensingInstance->getRandomValueInRange(0, sensingInstance->_medianBaseline) * (sensingInstance->getRandomBoolean() ? 1 : -1));
+
         // Distribution vector to set the elements which need to set with fault values
         // We will set the vector with true using generation model algorithms
         std::vector<bool> distibution(static_cast<size_t>(sampleCount), false);
@@ -374,7 +378,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Dead:
                 {
-                    if (isAnomalySample)
+                    if (ct > sampleCount/2)
                     {
                         telemetry.value = 0; // Simulate a dead sample with value 0
                     }
@@ -386,7 +390,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Stuck:
                 {
-                    if (isAnomalySample)
+                    if (ct > sampleCount/2)
                     {
                         telemetry.value = stuckValue; // Simulate a stuck sample with the same value
                     }
@@ -398,16 +402,8 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Offset:
                 {
-                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
-                    if (isAnomalySample)
-                    {
-                        unsigned long offsetValue = ((flow.maximum - flow.minimum) / 4) + 1;
-                        telemetry.value = baseValue + offsetValue;
-                    }
-                    else
-                    {
-                        telemetry.value = baseValue;
-                    }
+                    telemetry.value = sensingInstance->getRandomValueInRange(flow.minimum + offsetValue, flow.maximum + offsetValue);
+
                     break;
                 }
                 case Noise:
@@ -628,6 +624,11 @@ unsigned long Sensing::getRandomValueInRange(unsigned long min, unsigned long ma
         return min; // Return min if the range is invalid
     }
     return min + (rand() % (max - min + 1));
+}
+
+bool Sensing::getRandomBoolean()
+{
+    return (rand() % 2) == 1;
 }
 
 // Internal helper functions for Sensing class

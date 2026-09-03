@@ -102,6 +102,7 @@ public:
     bool startSimulation(SensorCallback* callback);
 private:
     unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
+    bool getRandomBoolean();
 
     void SetWithBernoulliDistribution(std::vector<bool> &set);
     void SetWithMarkovTwoStateDistribution(std::vector<bool> &set);
