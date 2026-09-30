@@ -219,6 +219,19 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
 
         // Distribution vector to set the elements which need to set with fault values
         // We will set the vector with true using generation model algorithms
+
+        // A binary array of boolean that are set to true act as a distribution set in following modes.
+        // The range is iterated from start to end as the value array and the dustribution array are matched index to index.
+        // 1. Normal flows - No effect
+        // 2. Baseline flows - No effect
+        // 3. Spike - If the binary index indicates true, then spike to be generated, or else generate a normal value
+        // 4. Offset - No effect. Offset is calculate at the outset before starting the value loop
+        // 5. Stepped Drift - The boolean true position serve as checkpoints. At checkpoints values tend to move away from the previous median
+        // 6. Linear Drift - The boolean true position serve as checkpoints. At checkpoints values may change the angle of slope as they deviate from baseline median
+        // 7. Stuck - No currently used, but the boolean true at the median of the random distribution set will be treated as the checkpoint where values get stuck.
+        // 8. Zero - No currently used, but the boolean true at the median of the random distribution set will be treated as the checkpoint where values become 0.
+        // 9. Noise or Jitter - If the binary index indicates true, then noise of jitter to be generated, or else generate a normal value
+
         std::vector<bool> distibution(static_cast<size_t>(sampleCount), false);
         std::fill(distibution.begin(), distibution.end(), false);
 
