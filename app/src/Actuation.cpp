@@ -8,21 +8,25 @@ Actuation::Actuation()
 {
 	_repeatRuleSequence = false;
 	_entryRuleId = 0;
+	_deviceId = "UnknownDevice";
 }
 
 Actuation::~Actuation()
 {
 }
 
-bool Actuation::loadRuleDefinition(const std::filesystem::path& ruleFile)
+void Actuation::setDeviceId(const std::string& deviceId)
 {
-	Configuration ruleConfiguration;
+	_deviceId = deviceId;
+}
 
-	if (!ruleConfiguration.loadCustomConfiguration(ruleFile.string()))
-	{
-		return false;
-	}
+std::string Actuation::getDeviceId() const
+{
+	return _deviceId;
+}
 
+bool Actuation::loadRuleDefinition(Configuration& ruleConfiguration)
+{
 	clearRules();
 
 	if (ruleConfiguration.isSection("General"))

@@ -6,10 +6,27 @@
 #include <unistd.h>
 #endif
 
-Configuration appConfig;
-MqttClient client;
+Configuration appConfig; // Loads Application.ini
+Configuration devConfig; // Loads Device.ini
+Configuration snsConfig; // Loads Sensing.ini
+Configuration actConfig; // Loads Actuation.ini
+
+Device device;
+Sensing sensing;
+Actuation actuation;
+
+MqttClient sensingClient;
+MqttClient actuationClient;
 SignalHandler signalHandler;
 Logger* loggerRefPtr = nullptr;
+
+std::string brokerAddress;
+int port;
+std::string clientId;
+std::string username;
+std::string password;
+std::string mqttPublishTopic;
+std::string mqttSubscribeTopic;
 
 std::string resolveDataPath()
 {

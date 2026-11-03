@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <chrono>
 #include <map>
+#include "Configuration.hpp"
 
 typedef enum RuleConditionType
 {
@@ -61,7 +62,10 @@ public:
 	Actuation();
 	~Actuation();
 
-	bool loadRuleDefinition(const std::filesystem::path& ruleFile);
+	void setDeviceId(const std::string& deviceId);
+	std::string getDeviceId() const;
+
+	bool loadRuleDefinition(Configuration& ruleConfiguration);
 	bool evaluate(unsigned long sensorValue, ActuationCallback* callback);
 	void clearRules();
 	std::list<Rule> getRules();
@@ -78,6 +82,7 @@ private:
 	std::list<Rule> _rules;
 	bool _repeatRuleSequence;
 	unsigned long _entryRuleId;
+	std::string _deviceId;
 	std::map<unsigned long, std::chrono::steady_clock::time_point> _lastClockTrigger;
 };
 

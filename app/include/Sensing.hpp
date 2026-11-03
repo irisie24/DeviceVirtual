@@ -12,6 +12,7 @@
 #include <fstream>
 #include <vector>
 #include <filesystem>
+#include "Configuration.hpp"
 
 // Code style fulll Allman style
 // Excluded C++ features - exclude auto keyword, exclude lambdas
@@ -58,13 +59,11 @@ typedef enum GeneratorModelType
 typedef struct Flow
 {
     FlowType type;
-    unsigned long scale;
     unsigned long duration;
     unsigned long unixepochstart;
     unsigned long unixepochend;
     unsigned long minimum;
     unsigned long maximum;
-    char unitofmeasurement[17];
 	std::string datasetfilename;
 }Flow;
 
@@ -75,6 +74,16 @@ typedef struct Telemetry
     unsigned long scale;
     std::string unitofmeasurement;
 }Telemetry;
+
+typedef struct SensingRuntimeConfiguration
+{
+    bool repeatFlowSequence;
+    unsigned long flowSequenceEnd;
+    SimulationMode simulationMode;
+    GeneratorModelType generatorModelType;
+    unsigned long telemetryScale;
+    std::string telemetryUnitOfMeasurement;
+}SensingRuntimeConfiguration;
 
 class SensorCallback
 {
@@ -92,14 +101,22 @@ public:
     void addFlow(Flow flow);
     std::list<Flow> getFlows();
     bool removeFlow(Flow flow);
-    void setRepeatable(bool repeatable, unsigned long unixepochend);
-    void setSimulationMode(SimulationMode simulationMode);
     void setFlowSetName(const std::string& flowSetName);
-    SimulationMode getSimulationMode();
-    void setGeneratorModelType(GeneratorModelType generatorModelType);
-    GeneratorModelType getGeneratorModelType();
-    bool loadSensorDefinition(const std::filesystem::path& flowFile);
-    bool startSimulation(SensorCallback* callback);
+    void setDeviceId(const std::string& deviceId);
+    void setNumFlows(unsigned long numFlows);
+    unsigned long getNumFlows() const;
+    void setRepeatFlowSequence(bool repeatFlowSequence);
+    bool getRepeatFlowSequence() const;
+    void setFlowSequenceEnd(unsigned long flowSequenceEnd);
+    unsigned long getFlowSequenceEnd() const;
+    void setSimulationMode(SimulationMode simulationMode);
+    SimulationMode getSimulationMode() const;
+    void setGenerationModelType(GeneratorModelType generationModelType);
+    GeneratorModelType getGenerationModelType() const;
+    void setRuntimeConfiguration(const SensingRuntimeConfiguration& runtimeConfiguration);
+    const SensingRuntimeConfiguration& getRuntimeConfiguration() const;
+    bool loadSensorDefinition(Configuration& flowConfiguration);
+    bool startSimulation(const SensingRuntimeConfiguration& runtimeConfiguration, SensorCallback* callback);
 private:
     unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
     bool getRandomBoolean();
@@ -120,20 +137,21 @@ private:
     void computeMedianOfBaseline();
     void computeAverageOfBaseline();
 
-    static void SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback);
+    static void SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback, SensingRuntimeConfiguration runtimeConfiguration);
 
     std::list<Flow> _flows;
-    bool _repeatable;
-    unsigned long _unixepochend;
-    SimulationMode _simulationMode;
     std::list<Telemetry> _baselineTelemetry;
     unsigned long _maxBaseline;
     unsigned long _minBaseline;
     unsigned long _medianBaseline;
     unsigned long _averageBaseline;
     std::string _flowSetName;
-    GeneratorModelType _generatorModelType;
     std::string _deviceId;
+    unsigned long _numFlows;
+    bool _repeatFlowSequence;
+    SimulationMode _simulationMode;
+    GeneratorModelType _generationModelType;
+    SensingRuntimeConfiguration _sensingRuntimeConfiguration;
 };
 
 

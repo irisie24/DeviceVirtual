@@ -35,13 +35,29 @@ Configuration::~Configuration()
 {
 }
 
-void Configuration::setFileName(std::string fname)
+void Configuration::setConfigDirectory(const std::string &configDir)
+{
+	_ConfigDirectory = configDir;
+}
+
+void Configuration::setConfigFileName(const std::string &fname)
 {
 	_ConfigFileName = fname;
 }
 
+std::string Configuration::getConfigFileName()
+{
+	return _ConfigFileName;
+}
+
+
 std::string Configuration::getConfigDirectory()
 {
+    // Do an auto resolution only if _ConfigDirectory is not set
+    if (!_ConfigDirectory.empty())
+    {
+        return _ConfigDirectory;
+    }
     return resolveConfigPath();
 }
 
@@ -107,6 +123,16 @@ bool Configuration::loadConfiguration()
     if (_ConfigFileName.empty())
     {
         return false;
+    }
+
+    // Use auto resolution only if _ConfigDirectory is not set
+    if (!_ConfigDirectory.empty())
+    {
+        std::string resolvedConfigFile = _ConfigDirectory + "/" + _ConfigFileName;
+        if (std::filesystem::exists(resolvedConfigFile) && std::filesystem::is_regular_file(resolvedConfigFile))
+        {
+            return loadConfiguration(resolvedConfigFile);
+        }
     }
 
     std::string resolvedPath = resolveConfigPath();

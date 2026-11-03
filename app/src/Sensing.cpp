@@ -10,11 +10,11 @@
 
 std::string epochToDateTime(const unsigned long epoch);
 unsigned long parseUnsignedLong(const std::string& value);
+SimulationMode parseSimulationMode(const std::string& value);
+GeneratorModelType parseGeneratorModelType(const std::string& value);
 FlowType parseFlowType(const std::string& value);
 std::string flowTypeToString(FlowType flowType);
 unsigned long parseUnixEpoch(const std::string& value);
-SimulationMode parseSimulationMode(const std::string& value);
-GeneratorModelType parseGeneratorModelType(const std::string& value);
 
 /*
  * Notes on simulation logic
@@ -29,10 +29,17 @@ GeneratorModelType parseGeneratorModelType(const std::string& value);
 
 Sensing::Sensing()
 {
-    _repeatable = false;
-    _unixepochend = 0;
+    _deviceId = "UnknownDevice";
+    _numFlows = 0;
+    _repeatFlowSequence = false;
     _simulationMode = SimulationModeDataset;
-    _generatorModelType = ModelUnknown;
+    _generationModelType = ModelUnknown;
+    _sensingRuntimeConfiguration.repeatFlowSequence = false;
+    _sensingRuntimeConfiguration.flowSequenceEnd = 0;
+    _sensingRuntimeConfiguration.simulationMode = SimulationModeDataset;
+    _sensingRuntimeConfiguration.generatorModelType = ModelUnknown;
+    _sensingRuntimeConfiguration.telemetryScale = 0;
+    _sensingRuntimeConfiguration.telemetryUnitOfMeasurement = "";
 }
 
 Sensing::~Sensing()
@@ -49,22 +56,6 @@ std::list<Flow> Sensing::getFlows()
     return _flows;
 }
 
-void Sensing::setRepeatable(bool repeatable, unsigned long unixepochend)
-{
-    _repeatable = repeatable;
-    _unixepochend = unixepochend;
-}
-
-void Sensing::setSimulationMode(SimulationMode simulationMode)
-{
-    _simulationMode = simulationMode;
-}
-
-SimulationMode Sensing::getSimulationMode()
-{
-    return _simulationMode;
-}
-
 void Sensing::setFlowSetName(const std::string& flowSetName)
 {
 	std::string datapath = resolveDataPath();
@@ -72,37 +63,88 @@ void Sensing::setFlowSetName(const std::string& flowSetName)
     _flowSetName = datapath + "/" +flowSetName + ".csv"; // Append .csv to the flow set name
 }
 
-void Sensing::setGeneratorModelType(GeneratorModelType generatorModelType)
+void Sensing::setDeviceId(const std::string& deviceId)
 {
-    _generatorModelType = generatorModelType;
+    _deviceId = deviceId;
 }
 
-GeneratorModelType Sensing::getGeneratorModelType()
+void Sensing::setNumFlows(unsigned long numFlows)
 {
-    return _generatorModelType;
+    _numFlows = numFlows;
 }
 
-bool Sensing::loadSensorDefinition(const std::filesystem::path& flowFile)
+unsigned long Sensing::getNumFlows() const
 {
-    Configuration flowConfiguration;
+    return _numFlows;
+}
 
-    if (!flowConfiguration.loadCustomConfiguration(flowFile.string()))
-    {
-        return false;
-    }
+void Sensing::setRepeatFlowSequence(bool repeatFlowSequence)
+{
+    _repeatFlowSequence = repeatFlowSequence;
+    _sensingRuntimeConfiguration.repeatFlowSequence = _repeatFlowSequence;
+}
+
+bool Sensing::getRepeatFlowSequence() const
+{
+    return _repeatFlowSequence;
+}
+
+void Sensing::setFlowSequenceEnd(unsigned long flowSequenceEnd)
+{
+    _sensingRuntimeConfiguration.flowSequenceEnd = flowSequenceEnd;
+}
+
+unsigned long Sensing::getFlowSequenceEnd() const
+{
+    return _sensingRuntimeConfiguration.flowSequenceEnd;
+}
+
+void Sensing::setSimulationMode(SimulationMode simulationMode)
+{
+    _simulationMode = simulationMode;
+    _sensingRuntimeConfiguration.simulationMode = _simulationMode;
+}
+
+SimulationMode Sensing::getSimulationMode() const
+{
+    return _simulationMode;
+}
+
+void Sensing::setGenerationModelType(GeneratorModelType generationModelType)
+{
+    _generationModelType = generationModelType;
+    _sensingRuntimeConfiguration.generatorModelType = _generationModelType;
+}
+
+GeneratorModelType Sensing::getGenerationModelType() const
+{
+    return _generationModelType;
+}
+
+void Sensing::setRuntimeConfiguration(const SensingRuntimeConfiguration& runtimeConfiguration)
+{
+    _sensingRuntimeConfiguration = runtimeConfiguration;
+    _repeatFlowSequence = _sensingRuntimeConfiguration.repeatFlowSequence;
+    _simulationMode = _sensingRuntimeConfiguration.simulationMode;
+    _generationModelType = _sensingRuntimeConfiguration.generatorModelType;
+}
+
+const SensingRuntimeConfiguration& Sensing::getRuntimeConfiguration() const
+{
+    return _sensingRuntimeConfiguration;
+}
+
+bool Sensing::loadSensorDefinition(Configuration& flowConfiguration)
+{
+    _flows.clear();
 
     if (flowConfiguration.isSection("General"))
     {
-        bool repeatFlowSequence = flowConfiguration.getValue("General", "repeat_flow_sequence", "0") == "1";
-        unsigned long flowSequenceEnd = parseUnixEpoch(flowConfiguration.getValue("General", "flow_sequence_end", "1970/01/01 00:00:00"));
-        SimulationMode simulationMode = parseSimulationMode(flowConfiguration.getValue("General", "simulation_mode", "dataset"));
-        GeneratorModelType generatorModelType = parseGeneratorModelType(flowConfiguration.getValue("General", "generation_model", "deterministic_pattern"));
-        std::string deviceId = flowConfiguration.getValue("General", "device_id", "UnknownDevice");
-
-        setRepeatable(repeatFlowSequence, flowSequenceEnd);
-        setSimulationMode(simulationMode);
-        setGeneratorModelType(generatorModelType);
-        _deviceId = deviceId;
+        setNumFlows(parseUnsignedLong(flowConfiguration.getValue("General", "num_flows", "0")));
+        setRepeatFlowSequence(flowConfiguration.getValue("General", "repeat_flow_sequence", "0") == "1");
+        setFlowSequenceEnd(parseUnixEpoch(flowConfiguration.getValue("General", "flow_sequence_end", "1970/01/01 00:00:00")));
+        setSimulationMode(parseSimulationMode(flowConfiguration.getValue("General", "simulation_mode", "dataset")));
+        setGenerationModelType(parseGeneratorModelType(flowConfiguration.getValue("General", "generation_model", "deterministic_pattern")));
     }
 
     std::list<std::string> sections = flowConfiguration.getSections();
@@ -117,21 +159,17 @@ bool Sensing::loadSensorDefinition(const std::filesystem::path& flowFile)
         std::memset(&flow, 0, sizeof(flow));
 
         flow.type = parseFlowType(flowConfiguration.getValue(section, "type", "baseline"));
-        flow.scale = parseUnsignedLong(flowConfiguration.getValue(section, "scale", "1"));
         flow.minimum = parseUnsignedLong(flowConfiguration.getValue(section, "min", "0"));
         flow.maximum = parseUnsignedLong(flowConfiguration.getValue(section, "max", "100"));
         flow.duration = parseUnsignedLong(flowConfiguration.getValue(section, "intervalsecs", "300"));
         flow.unixepochstart = parseUnixEpoch(flowConfiguration.getValue(section, "start", "1970/01/01 00:00:00"));
         flow.unixepochend = parseUnixEpoch(flowConfiguration.getValue(section, "end", "1970/01/01 00:00:00"));
 
-        std::string unit = flowConfiguration.getValue(section, "uom", "NA");
-        std::strncpy(flow.unitofmeasurement, unit.c_str(), sizeof(flow.unitofmeasurement) - 1);
-        flow.unitofmeasurement[sizeof(flow.unitofmeasurement) - 1] = '\0';
 
         addFlow(flow);
     }
 
-    return true;
+    return !_flows.empty();
 }
 
 bool Sensing::removeFlow(Flow flow)
@@ -139,12 +177,10 @@ bool Sensing::removeFlow(Flow flow)
     for (std::list<Flow>::iterator it = _flows.begin(); it != _flows.end(); ++it)
     {
         if (it->type == flow.type &&
-            it->scale == flow.scale &&
             it->duration == flow.duration &&
             it->unixepochstart == flow.unixepochstart &&
             it->minimum == flow.minimum &&
-            it->maximum == flow.maximum &&
-            std::string(it->unitofmeasurement) == std::string(flow.unitofmeasurement))
+            it->maximum == flow.maximum )
         {
             _flows.erase(it);
             return true;
@@ -153,23 +189,23 @@ bool Sensing::removeFlow(Flow flow)
     return false;
 }
 
-bool Sensing::startSimulation(SensorCallback* callback)
+bool Sensing::startSimulation(const SensingRuntimeConfiguration& runtimeConfiguration, SensorCallback* callback)
 {
     _baselineTelemetry.clear(); 
-    if (_simulationMode == SimulationModeRealtime)
+    if (runtimeConfiguration.simulationMode == SimulationModeRealtime)
     {
-        std::thread simulationThread(Sensing::SimulationThreadProc, this, callback);
+        std::thread simulationThread(Sensing::SimulationThreadProc, this, callback, runtimeConfiguration);
         simulationThread.detach();
     }
     else
     {
-        SimulationThreadProc(this, callback);
+        SimulationThreadProc(this, callback, runtimeConfiguration);
     }
 
     return true;
 }
 
-void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback)
+void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* callback, SensingRuntimeConfiguration runtimeConfiguration)
 {
     if (callback == nullptr)
     {
@@ -235,7 +271,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         std::vector<bool> distibution(static_cast<size_t>(sampleCount), false);
         std::fill(distibution.begin(), distibution.end(), false);
 
-        switch(sensingInstance->getGeneratorModelType())
+        switch(runtimeConfiguration.generatorModelType)
         {
             case Bernoulli:
             {
@@ -302,7 +338,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         // Per-flow dataset output: generate a numbered CSV file for this flow when in dataset mode.
         std::ofstream perFlowFile;
         std::string perFlowFilename;
-        if (sensingInstance->_simulationMode == SimulationModeDataset)
+        if (runtimeConfiguration.simulationMode == SimulationModeDataset)
         {
             // Prefer the datasetfilename from the Flow if present; otherwise derive from the overall flow set name.
             std::filesystem::path basePath;
@@ -354,9 +390,10 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         for (unsigned long t = flow.unixepochstart, ct = 0; t <= flow.unixepochend; t += flow.duration, ct++)
         {
             Telemetry telemetry;
-            telemetry.scale = flow.scale; // Use the flow's scale
-            telemetry.unitofmeasurement = std::string(flow.unitofmeasurement); // Use the flow's unit of measurement
             telemetry.timestamp = t; // Use the flow's timestamp in dataset mode
+            telemetry.value = 0;
+            telemetry.scale = runtimeConfiguration.telemetryScale;
+            telemetry.unitofmeasurement = runtimeConfiguration.telemetryUnitOfMeasurement;
             bool isAnomalySample = false;
             if (ct < static_cast<unsigned long>(distibution.size()))
             {
@@ -488,15 +525,15 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
             }
 
-            callback->onTelemetryReceived(sensingInstance->_deviceId, telemetry, sensingInstance->_simulationMode);
+            callback->onTelemetryReceived(sensingInstance->_deviceId, telemetry, runtimeConfiguration.simulationMode);
 
-            if(sensingInstance->_simulationMode == SimulationModeRealtime)
+            if(runtimeConfiguration.simulationMode == SimulationModeRealtime)
             {
                 std::this_thread::sleep_for(std::chrono::seconds(flow.duration)); // Simulate a delay based on the flow's duration
             }
             else
             {
-                if(sensingInstance->_simulationMode == SimulationModeDataset)
+                if(runtimeConfiguration.simulationMode == SimulationModeDataset)
                 {
                     // Write to per-flow file if available (new behavior)
                     // Old behavior wrote to a single telemetryFile for the whole run.
@@ -511,7 +548,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         }
 
         // Close and notify per-flow file when in dataset mode
-        if (sensingInstance->_simulationMode == SimulationModeDataset)
+        if (runtimeConfiguration.simulationMode == SimulationModeDataset)
         {
             if (perFlowFile.is_open())
             {
@@ -877,6 +914,62 @@ unsigned long parseUnsignedLong(const std::string& value)
     return result;
 }
 
+SimulationMode parseSimulationMode(const std::string& value)
+{
+    if (value == "realtime")
+    {
+        return SimulationModeRealtime;
+    }
+
+    return SimulationModeDataset;
+}
+
+GeneratorModelType parseGeneratorModelType(const std::string& value)
+{
+    if (value == "bernoulli")
+    {
+        return Bernoulli;
+    }
+    if (value == "markov_two_state" || value == "markov")
+    {
+        return MarkovTwoState;
+    }
+    if (value == "semi_markov")
+    {
+        return SemiMarkov;
+    }
+    if (value == "renewal_process")
+    {
+        return RenewalProcess;
+    }
+    if (value == "poisson_onset")
+    {
+        return PoissonOnset;
+    }
+    if (value == "negative_binomial_runs")
+    {
+        return NegativeBinomialRuns;
+    }
+    if (value == "hidden_markov")
+    {
+        return HiddenMarkov;
+    }
+    if (value == "beta_bernoulli_mixture")
+    {
+        return BetaBernoulliMixture;
+    }
+    if (value == "block_segment")
+    {
+        return BlockSegment;
+    }
+    if (value == "deterministic_pattern" || value == "deterministic")
+    {
+        return DeterministicPattern;
+    }
+
+    return ModelUnknown;
+}
+
 FlowType parseFlowType(const std::string& value)
 {
     if (value == "baseline")
@@ -930,62 +1023,6 @@ unsigned long parseUnixEpoch(const std::string& value)
     }
 
     return static_cast<unsigned long>(std::mktime(&timeInfo));
-}
-
-SimulationMode parseSimulationMode(const std::string& value)
-{
-    if (value == "realtime")
-    {
-        return SimulationModeRealtime;
-    }
-
-    return SimulationModeDataset;
-}
-
-GeneratorModelType parseGeneratorModelType(const std::string& value)
-{
-    if (value == "bernoulli")
-    {
-        return Bernoulli;
-    }
-    else if (value == "markov_two_state" || value == "markov")
-    {
-        return MarkovTwoState;
-    }
-    else if (value == "semi_markov")
-    {
-        return SemiMarkov;
-    }
-    else if (value == "renewal_process")
-    {
-        return RenewalProcess;
-    }
-    else if (value == "poisson_onset")
-    {
-        return PoissonOnset;
-    }
-    else if (value == "negative_binomial_runs")
-    {
-        return NegativeBinomialRuns;
-    }
-    else if (value == "hidden_markov")
-    {
-        return HiddenMarkov;
-    }
-    else if (value == "beta_bernoulli_mixture")
-    {
-        return BetaBernoulliMixture;
-    }
-    else if (value == "block_segment")
-    {
-        return BlockSegment;
-    }
-    else if (value == "deterministic_pattern" || value == "deterministic")
-    {
-        return DeterministicPattern;
-    }
-
-    return ModelUnknown;
 }
 
 std::string flowTypeToString(FlowType flowType)

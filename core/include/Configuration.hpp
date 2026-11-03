@@ -15,8 +15,10 @@ class Configuration
 public:
 	Configuration();
 	~Configuration();
-	void setFileName(std::string fname);
+	void setConfigDirectory(const std::string &configDir);
 	std::string getConfigDirectory();
+	void setConfigFileName(const std::string &fname);
+	std::string getConfigFileName();
 	bool loadConfiguration();
 	bool loadCustomConfiguration(const std::string &configFile);
 	std::string getValue(const std::string &section, const std::string &settingKey, const std::string defval = "");
@@ -29,6 +31,7 @@ private:
 	std::string resolveConfigPath();
 	std::map<std::string, std::map<std::string, std::string>> _ConfigurationMap;
 	std::string _ConfigFileName;
+	std::string _ConfigDirectory;
 };
 
 #endif
