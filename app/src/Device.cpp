@@ -214,6 +214,9 @@ SimulationMode Device::getSimulationMode() const
 void Device::setSensorOperatingMax(long sensorOperatingMax)
 {
     _sensorOperatingMax = sensorOperatingMax;
+    SensingRuntimeConfiguration runtimeConfiguration = _sensing.getRuntimeConfiguration();
+    runtimeConfiguration.sensorOperatingMax = _sensorOperatingMax;
+    _sensing.setRuntimeConfiguration(runtimeConfiguration);
 }
 
 long Device::getSensorOperatingMax() const
@@ -224,6 +227,9 @@ long Device::getSensorOperatingMax() const
 void Device::setSensorOperatingMin(long sensorOperatingMin)
 {
     _sensorOperatingMin = sensorOperatingMin;
+    SensingRuntimeConfiguration runtimeConfiguration = _sensing.getRuntimeConfiguration();
+    runtimeConfiguration.sensorOperatingMin = _sensorOperatingMin;
+    _sensing.setRuntimeConfiguration(runtimeConfiguration);
 }
 
 long Device::getSensorOperatingMin() const
@@ -291,9 +297,12 @@ bool Device::startSensingSimulation(SensorCallback* callback)
 {
     _sensing.setDeviceId(_deviceId);
     SensingRuntimeConfiguration runtimeConfiguration = _sensing.getRuntimeConfiguration();
+    runtimeConfiguration.sensorOperatingMin = _sensorOperatingMin;
+    runtimeConfiguration.sensorOperatingMax = _sensorOperatingMax;
     runtimeConfiguration.telemetryScale = _scale;
     runtimeConfiguration.telemetryUnitOfMeasurement = _unitOfMeasurement;
     _sensing.setRuntimeConfiguration(runtimeConfiguration);
+    _sensing.normalizeFlowRanges(runtimeConfiguration);
     return _sensing.startSimulation(_sensing.getRuntimeConfiguration(), callback);
 }
 

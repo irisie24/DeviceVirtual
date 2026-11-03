@@ -10,6 +10,7 @@
 
 std::string epochToDateTime(const unsigned long epoch);
 unsigned long parseUnsignedLong(const std::string& value);
+long parseLong(const std::string& value);
 SimulationMode parseSimulationMode(const std::string& value);
 GeneratorModelType parseGeneratorModelType(const std::string& value);
 FlowType parseFlowType(const std::string& value);
@@ -38,6 +39,8 @@ Sensing::Sensing()
     _sensingRuntimeConfiguration.flowSequenceEnd = 0;
     _sensingRuntimeConfiguration.simulationMode = SimulationModeDataset;
     _sensingRuntimeConfiguration.generatorModelType = ModelUnknown;
+    _sensingRuntimeConfiguration.sensorOperatingMin = 0;
+    _sensingRuntimeConfiguration.sensorOperatingMax = 0;
     _sensingRuntimeConfiguration.telemetryScale = 0;
     _sensingRuntimeConfiguration.telemetryUnitOfMeasurement = "";
 }
@@ -134,6 +137,40 @@ const SensingRuntimeConfiguration& Sensing::getRuntimeConfiguration() const
     return _sensingRuntimeConfiguration;
 }
 
+void Sensing::normalizeFlowRanges(const SensingRuntimeConfiguration& runtimeConfiguration)
+{
+    if (runtimeConfiguration.sensorOperatingMin == 0 && runtimeConfiguration.sensorOperatingMax == 0)
+    {
+        return;
+    }
+
+    const long lowerBound = std::min(runtimeConfiguration.sensorOperatingMin, runtimeConfiguration.sensorOperatingMax);
+    const long upperBound = std::max(runtimeConfiguration.sensorOperatingMin, runtimeConfiguration.sensorOperatingMax);
+
+    for (Flow& flow : _flows)
+    {
+        long normalizedMin = static_cast<long>(flow.minimum);
+        long normalizedMax = static_cast<long>(flow.maximum);
+
+        if (normalizedMin < lowerBound)
+        {
+            normalizedMin = lowerBound;
+        }
+        if (normalizedMax > upperBound)
+        {
+            normalizedMax = upperBound;
+        }
+        if (normalizedMin > normalizedMax)
+        {
+            normalizedMin = lowerBound;
+            normalizedMax = upperBound;
+        }
+
+        flow.minimum = normalizedMin;
+        flow.maximum = normalizedMax;
+    }
+}
+
 bool Sensing::loadSensorDefinition(Configuration& flowConfiguration)
 {
     _flows.clear();
@@ -159,12 +196,11 @@ bool Sensing::loadSensorDefinition(Configuration& flowConfiguration)
         std::memset(&flow, 0, sizeof(flow));
 
         flow.type = parseFlowType(flowConfiguration.getValue(section, "type", "baseline"));
-        flow.minimum = parseUnsignedLong(flowConfiguration.getValue(section, "min", "0"));
-        flow.maximum = parseUnsignedLong(flowConfiguration.getValue(section, "max", "100"));
+        flow.minimum = parseLong(flowConfiguration.getValue(section, "min", "0"));
+        flow.maximum = parseLong(flowConfiguration.getValue(section, "max", "100"));
         flow.duration = parseUnsignedLong(flowConfiguration.getValue(section, "intervalsecs", "300"));
         flow.unixepochstart = parseUnixEpoch(flowConfiguration.getValue(section, "start", "1970/01/01 00:00:00"));
         flow.unixepochend = parseUnixEpoch(flowConfiguration.getValue(section, "end", "1970/01/01 00:00:00"));
-
 
         addFlow(flow);
     }
@@ -191,7 +227,9 @@ bool Sensing::removeFlow(Flow flow)
 
 bool Sensing::startSimulation(const SensingRuntimeConfiguration& runtimeConfiguration, SensorCallback* callback)
 {
-    _baselineTelemetry.clear(); 
+    _baselineTelemetry.clear();
+    normalizeFlowRanges(runtimeConfiguration);
+
     if (runtimeConfiguration.simulationMode == SimulationModeRealtime)
     {
         std::thread simulationThread(Sensing::SimulationThreadProc, this, callback, runtimeConfiguration);
@@ -240,7 +278,7 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
         // Setup some handy variables for later use in the loop
 
         // For Stuck flow type, we need a value to stick to
-        unsigned long stuckValue = sensingInstance->getRandomValueInRange(sensingInstance->_minBaseline, sensingInstance->_maxBaseline);
+        long stuckValue = sensingInstance->getRandomValueInRange(sensingInstance->_minBaseline, sensingInstance->_maxBaseline);
 
         // Calculate the total sample count based on time range and duration.
         unsigned long sampleCount = ((flow.unixepochend - flow.unixepochstart) / flow.duration) + 1;
@@ -249,9 +287,10 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
             sampleCount = 1;
         }
 
-        unsigned long offsetValue = 0;
+        long offsetValue = 0;
         // Offset will be = median + plus or minus decided by a random bool + random percent of the median value
-        offsetValue = (sensingInstance->_medianBaseline + sensingInstance->getRandomValueInRange(0, sensingInstance->_medianBaseline) * (sensingInstance->getRandomBoolean() ? 1 : -1));
+        const long medianOffsetRange = std::max<long>(0, sensingInstance->_medianBaseline);
+        offsetValue = (sensingInstance->_medianBaseline + sensingInstance->getRandomValueInRange(0, medianOffsetRange) * (sensingInstance->getRandomBoolean() ? 1 : -1));
 
         // Distribution vector to set the elements which need to set with fault values
         // We will set the vector with true using generation model algorithms
@@ -458,11 +497,11 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case Noise:
                 {
-                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     if (isAnomalySample)
                     {
-                        unsigned long jitter = ((flow.maximum - flow.minimum) / 10) + 1;
-                        unsigned long direction = static_cast<unsigned long>(rand() % 2);
+                        const long jitter = ((flow.maximum - flow.minimum) / 10) + 1;
+                        const unsigned long direction = static_cast<unsigned long>(rand() % 2);
                         if (direction == 0)
                         {
                             telemetry.value = baseValue + jitter;
@@ -487,11 +526,11 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case DriftLinear:
                 {
-                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     if (isAnomalySample)
                     {
-                        unsigned long maxDrift = ((flow.maximum - flow.minimum) / 3) + 1;
-                        unsigned long drift = (ct * maxDrift) / sampleCount;
+                        const long maxDrift = ((flow.maximum - flow.minimum) / 3) + 1;
+                        const long drift = (static_cast<long>(ct) * maxDrift) / static_cast<long>(sampleCount);
                         telemetry.value = baseValue + drift;
                     }
                     else
@@ -502,13 +541,13 @@ void Sensing::SimulationThreadProc(Sensing* sensingInstance, SensorCallback* cal
                 }
                 case DriftStepped:
                 {
-                    unsigned long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
+                    long baseValue = sensingInstance->getRandomValueInRange(flow.minimum, flow.maximum);
                     if (isAnomalySample)
                     {
-                        unsigned long stepWindow = (sampleCount / 5) + 1;
-                        unsigned long stepIndex = ct / stepWindow;
-                        unsigned long stepSize = ((flow.maximum - flow.minimum) / 8) + 1;
-                        telemetry.value = baseValue + (stepIndex * stepSize);
+                        const unsigned long stepWindow = (sampleCount / 5) + 1;
+                        const unsigned long stepIndex = ct / stepWindow;
+                        const long stepSize = ((flow.maximum - flow.minimum) / 8) + 1;
+                        telemetry.value = baseValue + (static_cast<long>(stepIndex) * stepSize);
                     }
                     else
                     {
@@ -569,7 +608,7 @@ void Sensing::computeMaxOfBaseline()
         return;
     }
 
-    unsigned long maxValue = 0;
+    long maxValue = _baselineTelemetry.front().value;
     for (std::list<Telemetry>::const_iterator it = _baselineTelemetry.begin(); it != _baselineTelemetry.end(); ++it)
     {
         if (it->value > maxValue)
@@ -590,7 +629,7 @@ void Sensing::computeMinOfBaseline()
         return;
     }
 
-    unsigned long minValue = _baselineTelemetry.front().value;
+    long minValue = _baselineTelemetry.front().value;
     for (std::list<Telemetry>::const_iterator it = _baselineTelemetry.begin(); it != _baselineTelemetry.end(); ++it)
     {
         if (it->value < minValue)
@@ -611,7 +650,7 @@ void Sensing::computeMedianOfBaseline()
         return;
     }
 
-    std::list<unsigned long> values;
+    std::list<long> values;
     for (std::list<Telemetry>::const_iterator it = _baselineTelemetry.begin(); it != _baselineTelemetry.end(); ++it)
     {
         values.push_back(it->value);
@@ -619,24 +658,24 @@ void Sensing::computeMedianOfBaseline()
 
     values.sort();
 
-    unsigned long count = static_cast<unsigned long>(values.size());
-    unsigned long middle = count / 2;
+    const size_t count = values.size();
+    const size_t middle = count / 2;
 
     if (count % 2 == 0)
     {
-        std::list<unsigned long>::const_iterator it = values.begin();
-        std::advance(it, middle - 1);
-        unsigned long first = *it;
+        std::list<long>::const_iterator it = values.begin();
+        std::advance(it, static_cast<long>(middle - 1));
+        long first = *it;
 
         ++it;
-        unsigned long second = *it;
+        long second = *it;
 
         _medianBaseline = (first + second) / 2;
         return;
     }
 
-    std::list<unsigned long>::const_iterator it = values.begin();
-    std::advance(it, middle);
+    std::list<long>::const_iterator it = values.begin();
+    std::advance(it, static_cast<long>(middle));
     _medianBaseline = *it;
     return;
 }
@@ -649,8 +688,8 @@ void Sensing::computeAverageOfBaseline()
         return;
     }
 
-    unsigned long total = 0;
-    unsigned long count = 0;
+    long total = 0;
+    size_t count = 0;
     for (std::list<Telemetry>::const_iterator it = _baselineTelemetry.begin(); it != _baselineTelemetry.end(); ++it)
     {
         total += it->value;
@@ -663,17 +702,19 @@ void Sensing::computeAverageOfBaseline()
         return;
     }
 
-    _averageBaseline = total / count;
+    _averageBaseline = total / static_cast<long>(count);
     return;
 }
 
-unsigned long Sensing::getRandomValueInRange(unsigned long min, unsigned long max)
+long Sensing::getRandomValueInRange(long min, long max)
 {
     if (min >= max)
     {
-        return min; // Return min if the range is invalid
+        return min;
     }
-    return min + (rand() % (max - min + 1));
+
+    const long range = max - min + 1;
+    return min + static_cast<long>(rand() % static_cast<unsigned long>(range));
 }
 
 bool Sensing::getRandomBoolean()
@@ -910,6 +951,14 @@ unsigned long parseUnsignedLong(const std::string& value)
 {
     std::stringstream stream(value);
     unsigned long result = 0;
+    stream >> result;
+    return result;
+}
+
+long parseLong(const std::string& value)
+{
+    std::stringstream stream(value);
+    long result = 0;
     stream >> result;
     return result;
 }

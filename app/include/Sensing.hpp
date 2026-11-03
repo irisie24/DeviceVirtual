@@ -62,15 +62,15 @@ typedef struct Flow
     unsigned long duration;
     unsigned long unixepochstart;
     unsigned long unixepochend;
-    unsigned long minimum;
-    unsigned long maximum;
+    long minimum;
+    long maximum;
 	std::string datasetfilename;
 }Flow;
 
 typedef struct Telemetry
 {
     unsigned long timestamp;
-    unsigned long value;
+    long value;
     unsigned long scale;
     std::string unitofmeasurement;
 }Telemetry;
@@ -81,6 +81,8 @@ typedef struct SensingRuntimeConfiguration
     unsigned long flowSequenceEnd;
     SimulationMode simulationMode;
     GeneratorModelType generatorModelType;
+    long sensorOperatingMin;
+    long sensorOperatingMax;
     unsigned long telemetryScale;
     std::string telemetryUnitOfMeasurement;
 }SensingRuntimeConfiguration;
@@ -115,10 +117,11 @@ public:
     GeneratorModelType getGenerationModelType() const;
     void setRuntimeConfiguration(const SensingRuntimeConfiguration& runtimeConfiguration);
     const SensingRuntimeConfiguration& getRuntimeConfiguration() const;
+    void normalizeFlowRanges(const SensingRuntimeConfiguration& runtimeConfiguration);
     bool loadSensorDefinition(Configuration& flowConfiguration);
     bool startSimulation(const SensingRuntimeConfiguration& runtimeConfiguration, SensorCallback* callback);
 private:
-    unsigned long getRandomValueInRange(unsigned long min, unsigned long max);
+    long getRandomValueInRange(long min, long max);
     bool getRandomBoolean();
 
     void SetWithBernoulliDistribution(std::vector<bool> &set);
@@ -141,10 +144,10 @@ private:
 
     std::list<Flow> _flows;
     std::list<Telemetry> _baselineTelemetry;
-    unsigned long _maxBaseline;
-    unsigned long _minBaseline;
-    unsigned long _medianBaseline;
-    unsigned long _averageBaseline;
+    long _maxBaseline;
+    long _minBaseline;
+    long _medianBaseline;
+    long _averageBaseline;
     std::string _flowSetName;
     std::string _deviceId;
     unsigned long _numFlows;

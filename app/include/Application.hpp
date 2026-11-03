@@ -23,14 +23,18 @@ extern Device device;
 extern Sensing sensing;
 extern Actuation actuation;
 
-extern std::string resolveDataPath();
-
 extern std::string brokerAddress;
 extern int port;
 extern std::string clientId;
 extern std::string username;
 extern std::string password;
-extern std::string mqttPublishTopic;
-extern std::string mqttSubscribeTopic;
+extern std::string topic;
 
+extern std::string resolveDataPath();
+extern std::string getTelemetryFieldValue(const std::string& payload, const std::string& key);
+extern bool parseLongValue(const std::string& value, long& result);
+extern std::string parseDeviceIdFromTopic(const std::string& mqttTopic);
+
+extern bool running;
+    
 #endif

@@ -20,7 +20,8 @@ enum class LogLevel
     Info = 0,
     Error = 1,
     Warning = 2,
-    Critical = 3
+    Critical = 3,
+    Debug = 4
 };
 
 enum class LogFileMode
@@ -65,4 +66,3 @@ private:
 #define writeLogNormal(str) Logger::GetInstance()->write(str, LogLevel::Info, FUNCTIONNAME, __FILE__, __LINE__)
 
 #endif
-

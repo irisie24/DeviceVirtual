@@ -40,6 +40,7 @@ Logger::Logger()
     _LogLevelMap[LogLevel::Warning] = "WARN";
     _LogLevelMap[LogLevel::Error] = "ERROR";
     _LogLevelMap[LogLevel::Critical] = "CRITICAL";
+    _LogLevelMap[LogLevel::Debug] = "DEBUG";
 }
 
 Logger::~Logger()
@@ -110,8 +111,7 @@ void Logger::write(std::string logEntry, LogLevel llevel, const char* func, cons
     functionName = GetShortFunctionName(functionName);
 
     std::ostringstream stream;
-    stream << timestamp << "|" << GetLevelString(llevel) << "|" << line << "|" << functionName
-           << "|" << filename << "| " << logEntry << '\n';
+    stream << timestamp << "|" << GetLevelString(llevel) << "|" << line  << "|" << filename << "| " << logEntry << '\n';
 
     _LogFile << stream.str();
     _LogFile.flush();
@@ -220,6 +220,8 @@ std::string GetLevelString(LogLevel level)
         return "ERROR";
     case LogLevel::Critical:
         return "CRITICAL";
+    case LogLevel::Debug:
+        return "DEBUG";
     default:
         return "INFO";
     }

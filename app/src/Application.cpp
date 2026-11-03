@@ -1,5 +1,7 @@
 #include "Application.hpp"
 
+#include <sstream>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -25,8 +27,9 @@ int port;
 std::string clientId;
 std::string username;
 std::string password;
-std::string mqttPublishTopic;
-std::string mqttSubscribeTopic;
+std::string topic;
+
+bool running = true;
 
 std::string resolveDataPath()
 {
@@ -92,4 +95,47 @@ std::string resolveDataPath()
 
 #endif
     return dataPath;
+}
+
+std::string getTelemetryFieldValue(const std::string& payload, const std::string& key)
+{
+    std::stringstream tokenStream(payload);
+    std::string token;
+
+    while (std::getline(tokenStream, token, ','))
+    {
+        const size_t equalsPos = token.find('=');
+        if (equalsPos == std::string::npos)
+        {
+            continue;
+        }
+
+        const std::string currentKey = token.substr(0, equalsPos);
+        if (currentKey != key)
+        {
+            continue;
+        }
+
+        return token.substr(equalsPos + 1);
+    }
+
+    return "";
+}
+
+bool parseLongValue(const std::string& value, long& result)
+{
+    std::stringstream stream(value);
+    stream >> result;
+    return !stream.fail() && stream.eof();
+}
+
+std::string parseDeviceIdFromTopic(const std::string& mqttTopic)
+{
+    const size_t separatorPos = mqttTopic.find_last_of('/');
+    if (separatorPos == std::string::npos || separatorPos + 1 >= mqttTopic.length())
+    {
+        return "";
+    }
+
+    return mqttTopic.substr(separatorPos + 1);
 }

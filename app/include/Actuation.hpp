@@ -53,7 +53,7 @@ class ActuationCallback
 {
 public:
 	virtual void onActionTriggered(const ActuationDecision& decision) = 0;
-	virtual void onRuleEvaluationComplete(unsigned long sensorValue) = 0;
+	virtual void onRuleEvaluationComplete(long sensorValue) = 0;
 };
 
 class Actuation
@@ -66,7 +66,7 @@ public:
 	std::string getDeviceId() const;
 
 	bool loadRuleDefinition(Configuration& ruleConfiguration);
-	bool evaluate(unsigned long sensorValue, ActuationCallback* callback);
+	bool evaluate(long sensorValue, ActuationCallback* callback);
 	void clearRules();
 	std::list<Rule> getRules();
 

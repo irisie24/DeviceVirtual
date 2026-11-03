@@ -67,7 +67,7 @@ bool Actuation::loadRuleDefinition(Configuration& ruleConfiguration)
 	return !_rules.empty();
 }
 
-bool Actuation::evaluate(unsigned long sensorValue, ActuationCallback* callback)
+bool Actuation::evaluate(long sensorValue, ActuationCallback* callback)
 {
 	if (_rules.empty() || callback == nullptr)
 	{
@@ -103,7 +103,7 @@ bool Actuation::evaluate(unsigned long sensorValue, ActuationCallback* callback)
 		}
 		else
 		{
-			isMatch = evaluateCondition(static_cast<long>(sensorValue), rule->condition, rule->sensorValue);
+			isMatch = evaluateCondition(sensorValue, rule->condition, rule->sensorValue);
 		}
 		if (isMatch)
 		{

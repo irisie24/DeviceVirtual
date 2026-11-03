@@ -15,24 +15,92 @@
 #include "Sensing.hpp"
 #include "Device.hpp"
 
+// These are local to this files as the class definition of the callbacks are only used here
+
+class DeviceVirtualActuationCallback : public ActuationCallback
+{
+public:
+    void onActionTriggered(const ActuationDecision& decision) override
+    {
+        std::stringstream str;
+        str << "Actuation triggered - Rule ID: " << decision.ruleId
+            << ", Action Type: " << static_cast<int>(decision.actionType)
+            << ", IO: " << decision.actionIo
+            << ", Value: " << decision.actionValue;
+        writeLog(str.str(), LogLevel::Info);
+
+        // The topic we want to publish the actuation result to would typically be derived from the decision or device ID
+        std::string actuationTopic = topic + "/sensing/"+ device.getDeviceId();
+        actuationClient.publish(actuationTopic, str.str());
+        writeLog("Publishing actuation result to topic: " + actuationTopic, LogLevel::Info);
+    }
+
+    void onRuleEvaluationComplete(long sensorValue) override
+    {
+        std::stringstream str;
+        str << "Actuation evaluation complete for sensor value: " << sensorValue;
+        writeLog(str.str(), LogLevel::Info);
+    }
+};
+
+DeviceVirtualActuationCallback actuationDecisionCallback;
+
 class DeviceVirtualMqttCallback : public MqttCallback
 {
 public:
     void onMessageReceived(const std::string& topic, const std::string& message) override
     {
-        std::cout << "Received message on topic '" << topic << "': " << message << std::endl;
+        std::string str = "Received message on topic '" + topic + "': " + message;
+        writeLog(str, LogLevel::Debug);
+
+        const std::string deviceIdFromTopic = parseDeviceIdFromTopic(topic);
+        const std::string deviceIdFromPayload = getTelemetryFieldValue(message, "deviceid");
+        std::string targetDeviceId = deviceIdFromTopic;
+        if (!deviceIdFromPayload.empty())
+        {
+            targetDeviceId = deviceIdFromPayload;
+        }
+
+        if (targetDeviceId.empty())
+        {
+            writeLog("Ignoring message because device id was not found in topic or payload.", LogLevel::Debug);
+            return;
+        }
+
+        const std::string currentDeviceId = device.getDeviceId();
+        if (!currentDeviceId.empty() && currentDeviceId != targetDeviceId)
+        {
+            writeLog("Ignoring message for a different device id: " + targetDeviceId, LogLevel::Debug);
+            return;
+        }
+
+        const std::string valueText = getTelemetryFieldValue(message, "value");
+        long sensorValue = 0;
+        if (valueText.empty() || !parseLongValue(valueText, sensorValue))
+        {
+            writeLog("Ignoring message because sensor value is missing or invalid.", LogLevel::Debug);
+            return;
+        }
+
+        const bool matched = device.getActuation().evaluate(sensorValue, &actuationDecisionCallback);
+        if (!matched)
+        {
+            writeLog("No actuation rule matched for sensor value: " + std::to_string(sensorValue), LogLevel::Debug);
+        }
     }
 
     void onConnectionLost() override
     {
-        std::cout << "MQTT connection lost." << std::endl;
+        writeLog("MQTT connection lost.", LogLevel::Error);
     }
 
     void onConnected() override
     {
-        std::cout << "MQTT connected." << std::endl;
+        writeLog("MQTT connected.", LogLevel::Info);
     }
 };
+
+DeviceVirtualMqttCallback callback;
 
 class DeviceVirtualSignalHandler : public SignalCallback
 {
@@ -50,8 +118,7 @@ class DeviceVirtualSignalHandler : public SignalCallback
         void shutdown() override
         {
             writeLog("Application shutting down.", LogLevel::Info);
-			sensingClient.disconnect();
-			exit(0);
+            running = false;
         }
 
         void alarm() override
@@ -80,6 +147,8 @@ class DeviceVirtualSignalHandler : public SignalCallback
         }
 };
 
+DeviceVirtualSignalHandler signalEvents;
+
 class TelemetryCallback : public SensorCallback
 {
 public:
@@ -100,26 +169,30 @@ public:
 
     void onTelemetryReceived(const std::string& deviceid, const Telemetry& telemetry, SimulationMode mode) override
     {
-        std::cout << "Telemetry received - Device ID: " << deviceid
+        std::stringstream str;
+        str << "Telemetry received - Device ID: " << deviceid
                   << ", Timestamp: " << telemetry.timestamp
                   << ", Value: " << telemetry.value
                   << ", Scale: " << telemetry.scale
-                  << ", Unit: " << telemetry.unitofmeasurement
-                  << std::endl;
+                  << ", Unit: " << telemetry.unitofmeasurement;
+
+        writeLog(str.str(), LogLevel::Info);
 
 		if (mode == SimulationModeDataset)
 		{
+            writeLog("Telemetry received in dataset mode - Device ID: " + deviceid, LogLevel::Info);
 			return;
 		}
 
         if (_client != nullptr && !_publishTopic.empty())
         {
+            writeLog("Publishing telemetry to broker - Device ID: " + deviceid, LogLevel::Info);
             std::ostringstream message;
             message << "deviceid=" << deviceid << ",timestamp=" << telemetry.timestamp
                     << ",value=" << telemetry.value
                     << ",scale=" << telemetry.scale
                     << ",unit=" << telemetry.unitofmeasurement;
-            _client->publish(_publishTopic + deviceid, message.str());
+            _client->publish(_publishTopic + "/sensing/"+ deviceid, message.str());
         }
     }
 
@@ -138,12 +211,7 @@ private:
     std::string _publishTopic;
 };
 
-std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory);
-
-// These are local to this files as the class definition of the callbacks are only used here
-DeviceVirtualMqttCallback callback;
-TelemetryCallback scallback;
-DeviceVirtualSignalHandler signalEvents;
+TelemetryCallback telemetryCallback;
 
 // The messaging flows is as follows:
 // Sensing class fires TelemetryCallback -> Published to broker -> DeviceVirtualMqttCallback receives it -> Actuation class acts upon it -> Actuation class publishes to broker any action taken
@@ -151,7 +219,8 @@ DeviceVirtualSignalHandler signalEvents;
 int main(int argc, char* argv[])
 {    
     loggerRefPtr = Logger::GetInstance();
-	loggerRefPtr->startLogging(LogFileMode::Append);
+	loggerRefPtr->startLogging(LogFileMode::CreateNew);
+    writeLog("Starting Device Virtual application.", LogLevel::Info);
 
     signalHandler.registerCallbackClient(&signalEvents);
 
@@ -185,7 +254,7 @@ int main(int argc, char* argv[])
 
     // Load sensing configuration
     snsConfig.setConfigDirectory(resolveDataPath());
-    snsConfig.setConfigFileName("Sensing.ini");
+    snsConfig.setConfigFileName("Sensing.flow.ini");
     if(snsConfig.loadConfiguration())
     {
         writeLog("Sensing configuration loaded successfully.", LogLevel::Info);
@@ -199,7 +268,7 @@ int main(int argc, char* argv[])
 
     // Load actuation configuration
     actConfig.setConfigDirectory(resolveDataPath());
-    actConfig.setConfigFileName("Actuation.ini");
+    actConfig.setConfigFileName("Actuation.rule.ini");
     if(actConfig.loadConfiguration())
     {
         writeLog("Actuation configuration loaded successfully.", LogLevel::Info);
@@ -218,8 +287,7 @@ int main(int argc, char* argv[])
     clientId = appConfig.getValue("MQTT", "ClientId", "DeviceVirtual");
     username = appConfig.getValue("MQTT", "Username", "");
     password = appConfig.getValue("MQTT", "Password", "");
-    mqttPublishTopic = appConfig.getValue("MQTT", "publishtopic", "devicevirtual/sensing/");
-    mqttSubscribeTopic = appConfig.getValue("MQTT", "subscribetopic", "devicevirtual/actuation/");
+    topic = appConfig.getValue("MQTT", "topic", "devicevirtual");
 
     // 2 We will process the device settings
     // Parse the device settings from the configuration
@@ -233,147 +301,28 @@ int main(int argc, char* argv[])
     device.loadActuationRuleDefinition(actConfig);
 
     // Intialize the sensing mqtt client
-    sensingClient.Initialize(brokerAddress, port, clientId, username, password, &callback);
+    sensingClient.Initialize(brokerAddress, port, clientId+"Sensing", username, password, &callback);
     sensingClient.connect(1, 3600);
 
     // Intialize the actuation mqtt client
-    actuationClient.Initialize(brokerAddress, port, clientId, username, password, &callback);
+    actuationClient.Initialize(brokerAddress, port, clientId+"Actuation", username, password, &callback);
     actuationClient.connect(1, 3600);
 
-    /*
-    appConfig.setConfigFileName("VirtualSensors.ini");
+    telemetryCallback.setClient(&sensingClient);
+    telemetryCallback.setPublishTopic(topic);
+    device.startSensingSimulation(&telemetryCallback);
 
-    if(appConfig.loadConfiguration())
-    {
-        writeLog("Configuration loaded successfully.", LogLevel::Info);
-    }
-    else
-    {
-        writeLog("Failed to load configuration.", LogLevel::Error);
-        writeLog(appConfig.getConfigDirectory().c_str(), LogLevel::Error);
-        writeLog("VirtualSensors.ini", LogLevel::Error);
-        return -1;
-    }
+    // We will catch the same messages published to the topic for actuation
+    actuationClient.subscribe(topic+"/sensing/#");
 
-    std::string configDirectory = appConfig.getConfigDirectory();
-    std::filesystem::path deviceDefinitionPath = std::filesystem::path(configDirectory) / "Device.ini";
-    Device deviceTemplate;
-    if (!deviceTemplate.loadDeviceDefinition(deviceDefinitionPath))
-    {
-        writeLog("Failed to load device definition: " + deviceDefinitionPath.string(), LogLevel::Error);
-        return -1;
-    }
-
-    std::list<Device> listOfDevices;
-    std::list<std::filesystem::path> flowFiles = discoverFlowFiles(configDirectory);
-
-    for (std::list<std::filesystem::path>::const_iterator it = flowFiles.begin(); it != flowFiles.end(); ++it)
-    {
-        Device device = deviceTemplate;
-
-        if (device.loadSensingFlowDefinition(*it))
-        {
-            // Set the flow set name based on the filename (without extension)
-            std::string flowSetName = it->stem().string();
-            device.getSensing().setFlowSetName(flowSetName);
-            listOfDevices.push_back(device);
-            writeLog("Loaded flow definition: " + it->filename().string(), LogLevel::Info);
-        }
-        else
-        {
-            writeLog("Failed to load flow definition: " + it->string(), LogLevel::Error);
-        }
-    }
-
-    if (listOfDevices.empty())
-    {
-        writeLog("No flow definitions were loaded.", LogLevel::Error);
-        return -1;
-    }
-
-    bool hasRealtimeSimulation = false;
-    for (std::list<Device>::iterator it = listOfDevices.begin(); it != listOfDevices.end(); ++it)
-    {
-        if (it->getSimulationMode() == SimulationModeRealtime)
-        {
-            hasRealtimeSimulation = true;
-            break;
-        }
-    }
-
-    // Parse the configuration values for MQTT broker address, port, client ID, username, and password
-    std::string brokerAddress = appConfig.getValue("MQTT", "BrokerAddress", "broker.emqx.io");
-    int port = std::stoi(appConfig.getValue("MQTT", "Port", "1883"));
-    std::string clientId = appConfig.getValue("MQTT", "ClientId", "DeviceVirtualClient");
-    std::string username = appConfig.getValue("MQTT", "Username", "");
-    std::string password = appConfig.getValue("MQTT", "Password", "");
-    std::string mqttPublishTopic = appConfig.getValue("MQTT", "publishtopic", "devicevirtual/sensing/");
-    std::string mqttSubscribeTopic = appConfig.getValue("MQTT", "subscribetopic", "devicevirtual/actuation/");
-
-    client.Initialize(brokerAddress, port, clientId, username, password, &callback);
-    scallback.setClient(&client);
-    scallback.setPublishTopic(mqttPublishTopic);
-
-    std::cout << "Connecting to broker..." << std::endl;
-    client.connect(1, 10);
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    if (!mqttSubscribeTopic.empty())
-    {
-        client.subscribe(mqttSubscribeTopic);
-    }
-
-    for (std::list<Device>::iterator it = listOfDevices.begin(); it != listOfDevices.end(); ++it)
-    {
-        it->startSensingSimulation(&scallback);
-    }
-
-	std::cout << "Press Ctrl+C to exit the application." << std::endl;
-
-    // Keep the main thread alive until the user requests shutdown (Ctrl+C).
-    // Previous implementation slept for a fixed 10 seconds which could let
-    // the program exit while background threads (including the MQTT reader)
-    // were still active, causing socket closes and WSAENOTSOCK/WSAEINTR.
-    while (true)
+    while(running)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-
-    client.disconnect();
-    std::cout << "MQTT test finished." << std::endl;
-    */
+ 
+    sensingClient.disconnect();
+    actuationClient.disconnect();
+    writeLog("MQTT clients disconnected.", LogLevel::Info);
 
     return 0;
-}
-
-std::list<std::filesystem::path> discoverFlowFiles(const std::string& configDirectory)
-{
-    std::list<std::filesystem::path> flowFiles;
-
-    if (configDirectory.empty())
-    {
-        return flowFiles;
-    }
-
-    std::filesystem::path directoryPath(configDirectory);
-    if (!std::filesystem::exists(directoryPath) || !std::filesystem::is_directory(directoryPath))
-    {
-        return flowFiles;
-    }
-
-    for (std::filesystem::directory_iterator it(directoryPath); it != std::filesystem::directory_iterator(); ++it)
-    {
-        if (!it->is_regular_file())
-        {
-            continue;
-        }
-
-        if (it->path().extension() == ".flow")
-        {
-            flowFiles.push_back(it->path());
-        }
-    }
-
-    flowFiles.sort();
-    return flowFiles;
 }
