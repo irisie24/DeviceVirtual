@@ -30,7 +30,7 @@ public:
         writeLog(str.str(), LogLevel::Info);
 
         // The topic we want to publish the actuation result to would typically be derived from the decision or device ID
-        std::string actuationTopic = topic + "/sensing/"+ device.getDeviceId();
+        std::string actuationTopic = topic + "/actuation/" + device.getDeviceId();
         actuationClient.publish(actuationTopic, str.str());
         writeLog("Publishing actuation result to topic: " + actuationTopic, LogLevel::Info);
     }
@@ -52,6 +52,12 @@ public:
     {
         std::string str = "Received message on topic '" + topic + "': " + message;
         writeLog(str, LogLevel::Debug);
+
+        if (topic.find("/actuation/") != std::string::npos)
+        {
+            writeLog("Ignoring actuation message on dedicated actuation topic: " + topic, LogLevel::Debug);
+            return;
+        }
 
         const std::string deviceIdFromTopic = parseDeviceIdFromTopic(topic);
         const std::string deviceIdFromPayload = getTelemetryFieldValue(message, "deviceid");
@@ -312,7 +318,7 @@ int main(int argc, char* argv[])
     telemetryCallback.setPublishTopic(topic);
     device.startSensingSimulation(&telemetryCallback);
 
-    // We will catch the same messages published to the topic for actuation
+    // Subscribe only to the telemetry topic. Actuation result updates use a dedicated topic so we do not re-enter the sensing callback loop.
     actuationClient.subscribe(topic+"/sensing/#");
 
     while(running)

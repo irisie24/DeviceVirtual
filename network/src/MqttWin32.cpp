@@ -89,21 +89,15 @@ bool readExactlyFromSocket(SOCKET socketFd, std::vector<std::uint8_t>& buffer, s
 {
     while (buffer.size() < expectedSize)
     {
-        std::vector<std::uint8_t> chunk(512, 0);
-        const auto toRead = std::min<std::size_t>(chunk.size(), expectedSize - buffer.size());
+        std::uint8_t byte = 0;
         const int received = ::recv(socketFd,
-                                    reinterpret_cast<char*>(chunk.data()),
-                                    static_cast<int>(toRead),
+                                    reinterpret_cast<char*>(&byte),
+                                    1,
                                     0);
-        if (received == SOCKET_ERROR)
+        if (received == 1)
         {
-            const int errorCode = WSAGetLastError();
-            std::cerr << "MqttWin32: recv() failed: " << errorCode << "\n";
-            if (errorCode == WSAEINTR)
-            {
-                continue;
-            }
-            return false;
+            buffer.push_back(byte);
+            continue;
         }
 
         if (received == 0)
@@ -112,7 +106,14 @@ bool readExactlyFromSocket(SOCKET socketFd, std::vector<std::uint8_t>& buffer, s
             return false;
         }
 
-        buffer.insert(buffer.end(), chunk.begin(), chunk.begin() + static_cast<std::size_t>(received));
+        const int errorCode = WSAGetLastError();
+        std::cerr << "MqttWin32: recv() failed: " << errorCode << "\n";
+        if (errorCode == WSAEINTR)
+        {
+            continue;
+        }
+
+        return false;
     }
 
     return true;
@@ -135,6 +136,8 @@ MqttClient::MqttClient()
     socketFd_ = -1;
     qos_ = 1;
     timeout_ = 30;
+    keepAliveSeconds_ = std::chrono::seconds(30);
+    lastActivity_ = std::chrono::steady_clock::now();
     stopReader_ = false;
     nextPacketId_ = 1;
 }
@@ -151,6 +154,8 @@ MqttClient::MqttClient(const std::string& brokerAddress, const int port, const s
     socketFd_ = -1;
     qos_ = 1;
     timeout_ = 30;
+    keepAliveSeconds_ = std::chrono::seconds(30);
+    lastActivity_ = std::chrono::steady_clock::now();
     stopReader_ = false;
     nextPacketId_ = 1;
 }
@@ -167,6 +172,8 @@ void MqttClient::Initialize(const std::string& brokerAddress, const int port, co
     socketFd_ = -1;
     qos_ = 1;
     timeout_ = 30;
+    keepAliveSeconds_ = std::chrono::seconds(30);
+    lastActivity_ = std::chrono::steady_clock::now();
     stopReader_ = false;
     nextPacketId_ = 1;
 }
@@ -176,12 +183,78 @@ MqttClient::~MqttClient()
     disconnect();
 }
 
+void MqttClient::sendPingRequest()
+{
+    if (socketFd_ < 0)
+    {
+        return;
+    }
+
+    const std::vector<std::uint8_t> packet = {kPingReq, 0x00};
+    if (writeAll(packet))
+    {
+        lastActivity_ = std::chrono::steady_clock::now();
+    }
+}
+
 void MqttClient::readerLoop()
 {
     while (!stopReader_.load())
     {
+        int socketFd = -1;
+        {
+            std::lock_guard<std::mutex> lock(socketMutex_);
+            socketFd = socketFd_;
+        }
+
+        if (socketFd < 0)
+        {
+            break;
+        }
+
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(static_cast<SOCKET>(socketFd), &readSet);
+
+        const auto keepAliveWindow = std::chrono::milliseconds(std::max<long long>(1000LL, static_cast<long long>(keepAliveSeconds_.count() * 500LL)));
+        const auto now = std::chrono::steady_clock::now();
+        if (keepAliveSeconds_.count() > 0 && now - lastActivity_ > keepAliveWindow)
+        {
+            sendPingRequest();
+        }
+
+        const long long timeoutMs = std::max<long long>(1LL, keepAliveWindow.count());
+        timeval timeout{};
+        timeout.tv_sec = static_cast<long>(timeoutMs / 1000LL);
+        timeout.tv_usec = static_cast<long>((timeoutMs % 1000LL) * 1000LL);
+
+        const int selectResult = select(0, &readSet, nullptr, nullptr, &timeout);
+        if (selectResult < 0)
+        {
+            const int errorCode = WSAGetLastError();
+            if (errorCode == WSAEINTR)
+            {
+                continue;
+            }
+            break;
+        }
+
+        if (selectResult == 0)
+        {
+            if (keepAliveSeconds_.count() > 0 && now - lastActivity_ > keepAliveSeconds_)
+            {
+                break;
+            }
+            continue;
+        }
+
+        if (FD_ISSET(static_cast<SOCKET>(socketFd), &readSet) == 0)
+        {
+            continue;
+        }
+
         std::vector<std::uint8_t> fixedHeader;
-        if (!readExactlyFromSocket(static_cast<SOCKET>(socketFd_), fixedHeader, 1))
+        if (!readExactlyFromSocket(static_cast<SOCKET>(socketFd), fixedHeader, 1))
         {
             break;
         }
@@ -198,9 +271,14 @@ void MqttClient::readerLoop()
         for (int i = 0; i < 4; ++i)
         {
             std::uint8_t byte = 0;
-            if (recv(static_cast<SOCKET>(socketFd_), reinterpret_cast<char*>(&byte), 1, 0) <= 0)
+            const int bytesRead = recv(static_cast<SOCKET>(socketFd), reinterpret_cast<char*>(&byte), 1, 0);
+            if (bytesRead <= 0)
             {
                 const int err = WSAGetLastError();
+                if (bytesRead < 0 && err == WSAEINTR)
+                {
+                    continue;
+                }
                 std::cerr << "MqttWin32: failed reading remaining length byte: " << err << "\n";
                 return;
             }
@@ -217,7 +295,7 @@ void MqttClient::readerLoop()
         std::vector<std::uint8_t> payload;
         if (remainingLength > 0)
         {
-            if (!readExactlyFromSocket(static_cast<SOCKET>(socketFd_), payload, remainingLength))
+            if (!readExactlyFromSocket(static_cast<SOCKET>(socketFd), payload, remainingLength))
             {
                 break;
             }
@@ -235,6 +313,7 @@ void MqttClient::readerLoop()
             std::lock_guard<std::mutex> lock(stateMutex_);
             isConnected_ = true;
             connectedCv_.notify_all();
+            lastActivity_ = std::chrono::steady_clock::now();
             if (callback_ != nullptr)
             {
                 callback_->onConnected();
@@ -242,8 +321,15 @@ void MqttClient::readerLoop()
             continue;
         }
 
+        if (messageType == kPingResp)
+        {
+            lastActivity_ = std::chrono::steady_clock::now();
+            continue;
+        }
+
         if (messageType == kPublish)
         {
+            lastActivity_ = std::chrono::steady_clock::now();
             parseIncomingPacket(packet);
         }
     }
@@ -354,6 +440,16 @@ std::vector<std::uint8_t> MqttClient::buildPublishPacket(const std::string& topi
     return packet;
 }
 
+std::vector<std::uint8_t> MqttClient::buildPubAckPacket(uint16_t packetId)
+{
+    std::vector<std::uint8_t> packet;
+    packet.push_back(0x40);
+    packet.push_back(0x02);
+    packet.push_back(static_cast<std::uint8_t>((packetId >> 8) & 0xFF));
+    packet.push_back(static_cast<std::uint8_t>(packetId & 0xFF));
+    return packet;
+}
+
 std::vector<std::uint8_t> MqttClient::buildSubscribePacket(const std::string& topic, int qos)
 {
     std::vector<std::uint8_t> packet;
@@ -440,9 +536,17 @@ void MqttClient::parseIncomingPacket(const std::vector<std::uint8_t>& packet)
     idx += topicLength;
 
     const std::uint8_t qosFlags = packet[0] & 0x06;
-    if (qosFlags != 0)
+    std::uint16_t packetId = 0;
+    if (qosFlags == 0x02)
     {
+        if (idx + 2 > packet.size())
+        {
+            return;
+        }
+        packetId = static_cast<std::uint16_t>((static_cast<std::uint16_t>(packet[idx]) << 8) | static_cast<std::uint16_t>(packet[idx + 1]));
         idx += 2;
+        const auto pubAckPacket = buildPubAckPacket(packetId);
+        writeAll(pubAckPacket);
     }
 
     std::string message(packet.begin() + static_cast<std::ptrdiff_t>(idx), packet.end());
@@ -453,6 +557,8 @@ void MqttClient::connect(int qos, int timeout)
 {
     qos_ = qos;
     timeout_ = timeout;
+    keepAliveSeconds_ = std::chrono::seconds(std::max(1, timeout));
+    lastActivity_ = std::chrono::steady_clock::now();
 
     if (!ensureWinsockReady())
     {
@@ -511,6 +617,7 @@ void MqttClient::connect(int qos, int timeout)
         return;
     }
 
+    lastActivity_ = std::chrono::steady_clock::now();
     readerThread_ = std::thread(&MqttClient::readerLoop, this);
 
     std::unique_lock<std::mutex> lock(stateMutex_);
@@ -521,20 +628,33 @@ void MqttClient::disconnect()
 {
     stopReader_ = true;
 
-    if (socketFd_ >= 0)
+    int socketFd = -1;
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        if (socketFd_ >= 0)
+        {
+            socketFd = socketFd_;
+            socketFd_ = -1;
+        }
+    }
+
+    if (socketFd >= 0)
     {
         std::vector<std::uint8_t> packet;
         packet.push_back(kDisconnect);
         packet.push_back(0x00);
-        writeAll(packet);
-        shutdown(static_cast<SOCKET>(socketFd_), SD_BOTH);
-        closesocket(static_cast<SOCKET>(socketFd_));
-        socketFd_ = -1;
+        writeSocket(static_cast<SOCKET>(socketFd), packet);
+        shutdown(static_cast<SOCKET>(socketFd), SD_BOTH);
     }
 
     if (readerThread_.joinable())
     {
         readerThread_.join();
+    }
+
+    if (socketFd >= 0)
+    {
+        closesocket(static_cast<SOCKET>(socketFd));
     }
 
     std::lock_guard<std::mutex> lock(stateMutex_);

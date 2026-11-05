@@ -40,11 +40,13 @@ class MqttClient
         void unsubscribe(const std::string& topic);
     private:
         void readerLoop();
+        void sendPingRequest();
         bool writeAll(const std::vector<uint8_t>& data);
         bool readExactly(std::vector<uint8_t>& buffer, std::size_t expectedSize);
         std::vector<uint8_t> encodeString(const std::string& value) const;
         std::vector<uint8_t> buildConnectPacket(int qos, int keepAliveSeconds);
         std::vector<uint8_t> buildPublishPacket(const std::string& topic, const std::string& message, int qos);
+        std::vector<uint8_t> buildPubAckPacket(uint16_t packetId);
         std::vector<uint8_t> buildSubscribePacket(const std::string& topic, int qos);
         std::vector<uint8_t> buildUnsubscribePacket(const std::string& topic);
         void parseIncomingPacket(const std::vector<uint8_t>& packet);
@@ -59,6 +61,8 @@ class MqttClient
         int socketFd_;
         int qos_;
         int timeout_;
+        std::chrono::seconds keepAliveSeconds_;
+        std::chrono::steady_clock::time_point lastActivity_;
         std::thread readerThread_;
         std::mutex socketMutex_;
         std::mutex stateMutex_;
