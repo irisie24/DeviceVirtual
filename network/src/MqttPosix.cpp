@@ -1,22 +1,42 @@
 #include "Mqtt.hpp"
 
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
-#include <cstring>
-#include <chrono>
-#include <vector>
+
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
+#include <string>
+#include <vector>
+
+namespace
+{
+enum class IoStatus
+{
+    Ok,
+    WouldBlock,
+    Timeout,
+    Closed,
+    Error
+};
 
 constexpr std::uint8_t kConnect = 0x10;
 constexpr std::uint8_t kConnAck = 0x20;
 constexpr std::uint8_t kPublish = 0x30;
+constexpr std::uint8_t kPubAck = 0x40;
+constexpr std::uint8_t kPubRec = 0x50;
+constexpr std::uint8_t kPubRel = 0x60;
+constexpr std::uint8_t kPubComp = 0x70;
 constexpr std::uint8_t kSubscribe = 0x80;
 constexpr std::uint8_t kSubAck = 0x90;
 constexpr std::uint8_t kUnsubscribe = 0xA0;
@@ -25,6 +45,237 @@ constexpr std::uint8_t kPingReq = 0xC0;
 constexpr std::uint8_t kPingResp = 0xD0;
 constexpr std::uint8_t kDisconnect = 0xE0;
 
+constexpr std::uint32_t kMaxRemainingLength = 268435455U;           // MQTT 3.1.1 limit
+constexpr std::uint32_t kMaxIncomingRemainingLength = 16U * 1024U * 1024U;
+constexpr int kIdleWaitMs = 1000;                                   // reader wakes at least this often
+constexpr long long kReadStallMs = 15000;                           // no byte for this long inside a packet
+constexpr long long kSendStallMs = 10000;                           // socket not writable for this long
+
+long long nowMillis()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// ------------------------------------------------------------------------------------------
+// Platform layer (POSIX). The protocol logic below uses only these functions.
+// ------------------------------------------------------------------------------------------
+const char kTag[] = "MqttPosix";
+
+#ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL;        // never raise SIGPIPE on a closed peer
+#else
+constexpr int kSendFlags = 0;
+#endif
+
+bool platformStartup()
+{
+    return true;
+}
+
+void platformClose(MqttSocket sock)
+{
+    ::close(sock);
+}
+
+void platformShutdown(MqttSocket sock)
+{
+    ::shutdown(sock, SHUT_RDWR);
+}
+
+bool setNonBlocking(int fd)
+{
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+    {
+        return false;
+    }
+    return ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+IoStatus waitFor(MqttSocket sock, short events, int timeoutMs)
+{
+    pollfd pfd{};
+    pfd.fd = sock;
+    pfd.events = events;
+
+    const int result = ::poll(&pfd, 1, timeoutMs);
+    if (result < 0)
+    {
+        return (errno == EINTR) ? IoStatus::Timeout : IoStatus::Error;
+    }
+    if (result == 0)
+    {
+        return IoStatus::Timeout;
+    }
+    if ((pfd.revents & POLLNVAL) != 0)
+    {
+        return IoStatus::Error;
+    }
+
+    // POLLIN/POLLOUT, or POLLHUP/POLLERR: the following recv()/send() reports which.
+    return IoStatus::Ok;
+}
+
+IoStatus platformWaitReadable(MqttSocket sock, int timeoutMs)
+{
+    return waitFor(sock, POLLIN, timeoutMs);
+}
+
+IoStatus platformWaitWritable(MqttSocket sock, int timeoutMs)
+{
+    return waitFor(sock, POLLOUT, timeoutMs);
+}
+
+IoStatus platformRecv(MqttSocket sock, std::uint8_t& byte)
+{
+    while (true)
+    {
+        const ssize_t received = ::recv(sock, &byte, 1, 0);
+        if (received == 1)
+        {
+            return IoStatus::Ok;
+        }
+        if (received == 0)
+        {
+            return IoStatus::Closed;
+        }
+        if (errno == EINTR)
+        {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            return IoStatus::WouldBlock;
+        }
+        std::cerr << kTag << ": recv() failed: " << std::strerror(errno) << "\n";
+        return IoStatus::Error;
+    }
+}
+
+IoStatus platformSend(MqttSocket sock, const std::uint8_t* data, std::size_t length, std::size_t& sent)
+{
+    while (true)
+    {
+        const ssize_t result = ::send(sock, data, length, kSendFlags);
+        if (result > 0)
+        {
+            sent = static_cast<std::size_t>(result);
+            return IoStatus::Ok;
+        }
+        if (result < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            return IoStatus::WouldBlock;
+        }
+        std::cerr << kTag << ": send() failed: " << std::strerror(errno) << "\n";
+        return IoStatus::Error;
+    }
+}
+
+// Resolves the host, connects with a timeout, and returns a connected NON-BLOCKING socket.
+MqttSocket platformConnect(const std::string& host, int port, int timeoutMs)
+{
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    addrinfo* result = nullptr;
+    const std::string portString = std::to_string(port);
+    const int rc = ::getaddrinfo(host.c_str(), portString.c_str(), &hints, &result);
+    if (rc != 0)
+    {
+        std::cerr << kTag << ": getaddrinfo() failed: " << ::gai_strerror(rc) << "\n";
+        return kInvalidMqttSocket;
+    }
+
+    const long long deadlineMs = nowMillis() + timeoutMs;
+    MqttSocket connected = kInvalidMqttSocket;
+
+    for (addrinfo* info = result; info != nullptr && connected == kInvalidMqttSocket; info = info->ai_next)
+    {
+        if (nowMillis() >= deadlineMs)
+        {
+            break;
+        }
+
+        const int fd = ::socket(info->ai_family, info->ai_socktype, info->ai_protocol);
+        if (fd < 0)
+        {
+            continue;
+        }
+
+        if (!setNonBlocking(fd))
+        {
+            ::close(fd);
+            continue;
+        }
+
+        const int rc2 = ::connect(fd, info->ai_addr, static_cast<socklen_t>(info->ai_addrlen));
+        if (rc2 != 0 && errno != EINPROGRESS && errno != EINTR)
+        {
+            ::close(fd);
+            continue;
+        }
+
+        bool ok = (rc2 == 0);
+        while (!ok)
+        {
+            const long long remainingMs = deadlineMs - nowMillis();
+            if (remainingMs <= 0)
+            {
+                break;
+            }
+
+            const IoStatus status = platformWaitWritable(fd, static_cast<int>(std::min<long long>(remainingMs, 1000)));
+            if (status == IoStatus::Error)
+            {
+                break;
+            }
+            if (status == IoStatus::Ok)
+            {
+                int soError = 0;
+                socklen_t soLen = sizeof(soError);
+                ok = (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &soLen) == 0 && soError == 0);
+                if (!ok)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (!ok)
+        {
+            ::close(fd);
+            continue;
+        }
+
+        connected = fd;
+    }
+
+    ::freeaddrinfo(result);
+
+    if (connected == kInvalidMqttSocket)
+    {
+        std::cerr << kTag << ": could not connect to " << host << ":" << port << "\n";
+        return kInvalidMqttSocket;
+    }
+
+    const int one = 1;
+    ::setsockopt(connected, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_NOSIGPIPE
+    ::setsockopt(connected, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+    return connected;
+}
+
+// ------------------------------------------------------------------------------------------
+// Protocol helpers
+// ------------------------------------------------------------------------------------------
 void encodeRemainingLength(std::vector<std::uint8_t>& packet, std::uint32_t value)
 {
     do
@@ -41,63 +292,6 @@ void encodeRemainingLength(std::vector<std::uint8_t>& packet, std::uint32_t valu
     } while (value > 0);
 }
 
-bool writeSocket(int socketFd, const std::vector<std::uint8_t>& data)
-{
-    std::size_t offset = 0;
-    while (offset < data.size())
-    {
-        const auto sent = send(socketFd, data.data() + offset, data.size() - offset, 0);
-        if (sent < 0)
-        {
-            std::cerr << "MqttPosix: send() failed: " << std::strerror(errno) << "\n";
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            return false;
-        }
-
-        if (sent == 0)
-        {
-            return false;
-        }
-
-        offset += static_cast<std::size_t>(sent);
-    }
-
-    return true;
-}
-
-bool readExactlyFromSocket(int socketFd, std::vector<std::uint8_t>& buffer, std::size_t expectedSize)
-{
-    while (buffer.size() < expectedSize)
-    {
-        std::uint8_t byte = 0;
-        const auto received = recv(socketFd, &byte, 1, 0);
-        if (received == 1)
-        {
-            buffer.push_back(byte);
-            continue;
-        }
-
-        if (received == 0)
-        {
-            std::cerr << "MqttPosix: recv() returned 0 (connection closed)\n";
-            return false;
-        }
-
-        if (errno == EINTR)
-        {
-            continue;
-        }
-
-        std::cerr << "MqttPosix: recv() failed: " << std::strerror(errno) << "\n";
-        return false;
-    }
-
-    return true;
-}
-
 std::vector<std::uint8_t> encodeStringPayload(const std::string& value)
 {
     std::vector<std::uint8_t> packet;
@@ -107,54 +301,77 @@ std::vector<std::uint8_t> encodeStringPayload(const std::string& value)
     packet.insert(packet.end(), value.begin(), value.end());
     return packet;
 }
-// End of anonymous namespace
 
+// Writes the whole buffer to a non-blocking socket. A partial write that cannot be
+// completed leaves the MQTT stream corrupt, so the caller must treat false as fatal.
+bool sendAll(MqttSocket sock, const std::vector<std::uint8_t>& data)
+{
+    std::size_t offset = 0;
+    bool waiting = false;
+    long long waitStartMs = 0;
+
+    while (offset < data.size())
+    {
+        std::size_t sent = 0;
+        const IoStatus status = platformSend(sock, data.data() + offset, data.size() - offset, sent);
+        if (status == IoStatus::Ok)
+        {
+            offset += sent;
+            waiting = false;
+            continue;
+        }
+
+        if (status != IoStatus::WouldBlock)
+        {
+            return false;
+        }
+
+        if (!waiting)
+        {
+            waiting = true;
+            waitStartMs = nowMillis();
+        }
+        else if (nowMillis() - waitStartMs > kSendStallMs)
+        {
+            std::cerr << kTag << ": send stalled, giving up\n";
+            return false;
+        }
+
+        if (platformWaitWritable(sock, 200) == IoStatus::Error)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Index of the first byte after the remaining-length field of an already framed packet.
+std::size_t payloadOffset(const std::vector<std::uint8_t>& packet)
+{
+    std::size_t idx = 1;
+    while (idx < packet.size() && (packet[idx++] & 0x80) != 0)
+    {
+    }
+    return idx;
+}
+} // end of anonymous namespace
+
+// ------------------------------------------------------------------------------------------
+// MqttClient
+// ------------------------------------------------------------------------------------------
 MqttClient::MqttClient()
 {
-    isConnected_ = false;
-    socketFd_ = -1;
-    qos_ = 1;
-    timeout_ = 30;
-    keepAliveSeconds_ = std::chrono::seconds(30);
-    lastActivity_ = std::chrono::steady_clock::now();
-    stopReader_ = false;
-    nextPacketId_ = 1;
 }
 
 MqttClient::MqttClient(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
+    : brokerAddress_(brokerAddress)
+    , port_(port)
+    , clientId_(clientId)
+    , username_(username)
+    , password_(password)
+    , callback_(callback)
 {
-    brokerAddress_ = brokerAddress;
-    port_ = port;
-    clientId_ = clientId;
-    username_ = username;
-    password_ = password;
-    callback_ = callback;
-    isConnected_ = false;
-    socketFd_ = -1;
-    qos_ = 1;
-    timeout_ = 30;
-    keepAliveSeconds_ = std::chrono::seconds(30);
-    lastActivity_ = std::chrono::steady_clock::now();
-    stopReader_ = false;
-    nextPacketId_ = 1;
-}
-
-void MqttClient::Initialize(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
-{
-    brokerAddress_ = brokerAddress;
-    port_ = port;
-    clientId_ = clientId;
-    username_ = username;
-    password_ = password;
-    callback_ = callback;
-    isConnected_ = false;
-    socketFd_ = -1;
-    qos_ = 1;
-    timeout_ = 30;
-    keepAliveSeconds_ = std::chrono::seconds(30);
-    lastActivity_ = std::chrono::steady_clock::now();
-    stopReader_ = false;
-    nextPacketId_ = 1;
 }
 
 MqttClient::~MqttClient()
@@ -162,181 +379,374 @@ MqttClient::~MqttClient()
     disconnect();
 }
 
-void MqttClient::sendPingRequest()
+void MqttClient::Initialize(const std::string& brokerAddress, const int port, const std::string& clientId, const std::string& username, const std::string& password, MqttCallback* callback)
 {
-    if (socketFd_ < 0)
-    {
-        return;
-    }
+    disconnect();
 
-    const std::vector<std::uint8_t> packet = {kPingReq, 0x00};
-    if (writeAll(packet))
-    {
-        lastActivity_ = std::chrono::steady_clock::now();
-    }
+    brokerAddress_ = brokerAddress;
+    port_ = port;
+    clientId_ = clientId;
+    username_ = username;
+    password_ = password;
+    callback_ = callback;
 }
 
-void MqttClient::readerLoop()
+bool MqttClient::isConnected() const
 {
+    return isConnected_.load();
+}
+
+std::uint16_t MqttClient::nextPacketId()
+{
+    // MQTT packet identifiers are 1..65535. Zero is invalid and brokers may drop the connection.
+    const auto n = nextPacketId_.fetch_add(1, std::memory_order_relaxed);
+    return static_cast<std::uint16_t>(n % 65535U + 1U);
+}
+
+bool MqttClient::writeAll(const std::vector<std::uint8_t>& data)
+{
+    std::lock_guard<std::mutex> lock(socketMutex_);
+
+    const MqttSocket sock = socket_.load();
+    if (sock == kInvalidMqttSocket)
+    {
+        return false;
+    }
+
+    if (!sendAll(sock, data))
+    {
+        // Unknown how much reached the broker: the stream is no longer trustworthy.
+        // Shutting the socket down makes the reader exit and report the loss.
+        platformShutdown(sock);
+        return false;
+    }
+
+    lastTxMs_.store(nowMillis());
+    return true;
+}
+
+bool MqttClient::sendPingRequest()
+{
+    const std::vector<std::uint8_t> packet = {kPingReq, 0x00};
+    return writeAll(packet);
+}
+
+bool MqttClient::readExactly(MqttSocket sock, std::vector<std::uint8_t>& buffer, std::size_t count)
+{
+    const std::size_t target = buffer.size() + count;
+    bool waiting = false;
+    long long waitStartMs = 0;
+
+    while (buffer.size() < target)
+    {
+        if (stopReader_.load())
+        {
+            return false;
+        }
+
+        // Always one byte at a time, so a read can never run into the next packet.
+        std::uint8_t byte = 0;
+        const IoStatus status = platformRecv(sock, byte);
+        if (status == IoStatus::Ok)
+        {
+            buffer.push_back(byte);
+            waiting = false;
+            continue;
+        }
+
+        if (status == IoStatus::WouldBlock)
+        {
+            if (!waiting)
+            {
+                waiting = true;
+                waitStartMs = nowMillis();
+            }
+            else if (nowMillis() - waitStartMs > kReadStallMs)
+            {
+                std::cerr << kTag << ": broker stalled in the middle of a packet\n";
+                return false;
+            }
+
+            if (platformWaitReadable(sock, 1000) == IoStatus::Error)
+            {
+                return false;
+            }
+            continue;
+        }
+
+        if (status == IoStatus::Closed)
+        {
+            std::cerr << kTag << ": connection closed by broker\n";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool MqttClient::readPacket(MqttSocket sock, std::vector<std::uint8_t>& packet)
+{
+    packet.clear();
+
+    if (!readExactly(sock, packet, 1))
+    {
+        return false;
+    }
+
+    std::uint32_t remainingLength = 0;
+    std::uint32_t multiplier = 1;
+    bool lengthComplete = false;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        if (!readExactly(sock, packet, 1))
+        {
+            return false;
+        }
+
+        const std::uint8_t byte = packet.back();
+        remainingLength += static_cast<std::uint32_t>(byte & 0x7F) * multiplier;
+        if ((byte & 0x80) == 0)
+        {
+            lengthComplete = true;
+            break;
+        }
+        multiplier *= 128;
+    }
+
+    if (!lengthComplete)
+    {
+        std::cerr << kTag << ": malformed remaining length, closing\n";
+        return false;
+    }
+
+    if (remainingLength > kMaxIncomingRemainingLength)
+    {
+        std::cerr << kTag << ": incoming packet too large (" << remainingLength << " bytes), closing\n";
+        return false;
+    }
+
+    return (remainingLength == 0) || readExactly(sock, packet, remainingLength);
+}
+
+void MqttClient::readerLoop(MqttSocket sock)
+{
+    bool sessionEstablished = false;
+    const long long keepAliveMs = static_cast<long long>(keepAliveSeconds_.count()) * 1000LL;
+    const long long halfMs = keepAliveMs / 2;
+
     while (!stopReader_.load())
     {
-        int socketFd = -1;
-        {
-            std::lock_guard<std::mutex> lock(socketMutex_);
-            socketFd = socketFd_;
-        }
+        int waitMs = kIdleWaitMs;
 
-        if (socketFd < 0)
+        if (sessionEstablished && keepAliveMs > 0)
         {
-            break;
-        }
+            long long now = nowMillis();
 
-        pollfd socketPoll{};
-        socketPoll.fd = socketFd;
-        socketPoll.events = POLLIN;
-
-        const auto keepAliveWindow = std::chrono::milliseconds(std::max(1000, static_cast<int>(keepAliveSeconds_.count() * 500)));
-        const auto now = std::chrono::steady_clock::now();
-        if (keepAliveSeconds_.count() > 0 && now - lastActivity_ > keepAliveWindow)
-        {
-            sendPingRequest();
-        }
-
-        const int pollTimeoutMs = static_cast<int>(std::max<long long>(1000LL, keepAliveWindow.count()));
-        const int pollResult = poll(&socketPoll, 1, pollTimeoutMs);
-        if (pollResult < 0)
-        {
-            if (errno == EINTR)
+            // Pings go out every keepAlive/2, so the broker answers at least that often.
+            // Silence for a whole keepAlive interval means the peer or the path is dead.
+            if (now - lastRxMs_.load() > keepAliveMs)
             {
-                continue;
-            }
-            break;
-        }
-
-        if (pollResult == 0)
-        {
-            if (keepAliveSeconds_.count() > 0 && now - lastActivity_ > keepAliveSeconds_)
-            {
+                std::cerr << kTag << ": nothing received from broker for " << keepAliveSeconds_.count() << " s, closing\n";
                 break;
             }
-            continue;
-        }
 
-        if ((socketPoll.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
-        {
-            break;
-        }
-
-        std::vector<std::uint8_t> fixedHeader;
-        if (!readExactlyFromSocket(socketFd, fixedHeader, 1))
-        {
-            break;
-        }
-
-        if (fixedHeader.empty())
-        {
-            continue;
-        }
-
-        std::vector<std::uint8_t> remainingLengthBytes;
-        std::uint32_t remainingLength = 0;
-        std::uint32_t multiplier = 1;
-
-        for (int i = 0; i < 4; ++i)
-        {
-            std::uint8_t byte = 0;
-            const auto bytesRead = recv(socketFd, &byte, 1, 0);
-            if (bytesRead <= 0)
+            if (now - lastTxMs_.load() >= halfMs)
             {
-                if (bytesRead < 0 && errno == EINTR)
+                if (!sendPingRequest())
                 {
-                    continue;
+                    break;
                 }
-                std::cerr << "MqttPosix: failed reading remaining length byte: " << std::strerror(errno) << "\n";
-                return;
+                now = nowMillis();
             }
 
-            remainingLengthBytes.push_back(byte);
-            remainingLength += (static_cast<std::uint32_t>(byte & 0x7F) * multiplier);
-            if ((byte & 0x80) == 0)
-            {
-                break;
-            }
-            multiplier *= 128;
+            const long long untilPingMs = halfMs - (now - lastTxMs_.load());
+            waitMs = static_cast<int>(std::max<long long>(20, std::min<long long>(untilPingMs, kIdleWaitMs)));
         }
 
-        std::vector<std::uint8_t> payload;
-        if (remainingLength > 0)
+        const IoStatus ready = platformWaitReadable(sock, waitMs);
+        if (ready == IoStatus::Timeout)
         {
-            if (!readExactlyFromSocket(socketFd, payload, remainingLength))
-            {
-                break;
-            }
+            continue;
+        }
+        if (ready == IoStatus::Error)
+        {
+            break;
         }
 
         std::vector<std::uint8_t> packet;
-        packet.push_back(fixedHeader[0]);
-        packet.insert(packet.end(), remainingLengthBytes.begin(), remainingLengthBytes.end());
-        packet.insert(packet.end(), payload.begin(), payload.end());
-
-        const std::uint8_t messageType = fixedHeader[0] & 0xF0;
-
-        if (messageType == kConnAck)
+        if (!readPacket(sock, packet))
         {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            isConnected_ = true;
-            connectedCv_.notify_all();
-            lastActivity_ = std::chrono::steady_clock::now();
-            if (callback_ != nullptr)
-            {
-                callback_->onConnected();
-            }
-            continue;
+            break;
         }
 
-        if (messageType == kPingResp)
-        {
-            lastActivity_ = std::chrono::steady_clock::now();
-            continue;
-        }
+        lastRxMs_.store(nowMillis());
 
-        if (messageType == kPublish)
+        if (!handlePacket(packet, sessionEstablished))
         {
-            lastActivity_ = std::chrono::steady_clock::now();
-            parseIncomingPacket(packet);
+            break;
         }
     }
+
+    // Wake any writer and release the peer; the descriptor itself is closed by disconnect().
+    platformShutdown(sock);
+    isConnected_.store(false);
 
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        isConnected_ = false;
+        connectDone_ = true;
     }
+    connectedCv_.notify_all();
 
-    if (callback_ != nullptr)
+    if (sessionEstablished && !stopReader_.load() && callback_ != nullptr)
     {
         callback_->onConnectionLost();
     }
 }
 
-bool MqttClient::writeAll(const std::vector<std::uint8_t>& data)
+bool MqttClient::handlePacket(const std::vector<std::uint8_t>& packet, bool& sessionEstablished)
 {
-    if (socketFd_ < 0)
+    const std::uint8_t messageType = packet[0] & 0xF0;
+
+    if (!sessionEstablished && messageType != kConnAck)
     {
+        std::cerr << kTag << ": packet type 0x" << std::hex << static_cast<int>(messageType) << std::dec << " before CONNACK, closing\n";
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(socketMutex_);
-    return writeSocket(socketFd_, data);
+    switch (messageType)
+    {
+    case kConnAck:
+    {
+        if (sessionEstablished)
+        {
+            std::cerr << kTag << ": duplicate CONNACK, closing\n";
+            return false;
+        }
+
+        // Fixed header (2) + session-present flags (1) + return code (1).
+        const bool accepted = (packet.size() >= 4) && (packet[3] == 0x00);
+        if (!accepted)
+        {
+            std::cerr << kTag << ": CONNACK refused, return code " << (packet.size() >= 4 ? static_cast<int>(packet[3]) : -1) << "\n";
+        }
+
+        sessionEstablished = accepted;
+        isConnected_.store(accepted);
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            connectDone_ = true;
+        }
+        connectedCv_.notify_all();
+
+        if (!accepted)
+        {
+            return false;
+        }
+
+        // Called without any lock held, so the callback may call back into the client.
+        if (callback_ != nullptr)
+        {
+            callback_->onConnected();
+        }
+        return true;
+    }
+
+    case kPublish:
+        return parseIncomingPacket(packet);
+
+    case kSubAck:
+        handleSubAck(packet);
+        return true;
+
+    case kPubRec:
+    case kPubRel:
+    case kPubComp:
+        // Only reachable if the broker ignores the QoS we asked for.
+        std::cerr << kTag << ": QoS 2 packet received but QoS 2 is not implemented, closing\n";
+        return false;
+
+    case kPingResp:
+    case kPubAck:
+    case kUnsubAck:
+    default:
+        return true;    // nothing to do; lastRx_ already refreshed
+    }
 }
 
-bool MqttClient::readExactly(std::vector<std::uint8_t>& buffer, std::size_t expectedSize)
+void MqttClient::handleSubAck(const std::vector<std::uint8_t>& packet) const
 {
-    return readExactlyFromSocket(socketFd_, buffer, expectedSize);
+    // payload: packet id (2) then one return code per topic filter; 0x80 means refused.
+    for (std::size_t i = payloadOffset(packet) + 2; i < packet.size(); ++i)
+    {
+        if (packet[i] == 0x80)
+        {
+            std::cerr << kTag << ": SUBSCRIBE refused by broker\n";
+        }
+    }
 }
 
-std::vector<std::uint8_t> MqttClient::encodeString(const std::string& value) const
+bool MqttClient::parseIncomingPacket(const std::vector<std::uint8_t>& packet)
 {
-    return encodeStringPayload(value);
+    const std::size_t size = packet.size();
+    const int qos = (packet[0] >> 1) & 0x03;
+
+    if (qos == 2)
+    {
+        std::cerr << kTag << ": QoS 2 PUBLISH received but QoS 2 is not implemented, closing\n";
+        return false;
+    }
+    if (qos == 3)
+    {
+        std::cerr << kTag << ": malformed PUBLISH flags, closing\n";
+        return false;
+    }
+
+    std::size_t idx = payloadOffset(packet);
+
+    if (idx + 2 > size)
+    {
+        std::cerr << kTag << ": truncated PUBLISH, closing\n";
+        return false;
+    }
+
+    const std::size_t topicLength = (static_cast<std::size_t>(packet[idx]) << 8) | static_cast<std::size_t>(packet[idx + 1]);
+    idx += 2;
+
+    if (idx + topicLength > size)
+    {
+        std::cerr << kTag << ": truncated PUBLISH topic, closing\n";
+        return false;
+    }
+
+    const std::string topic(packet.begin() + static_cast<std::ptrdiff_t>(idx), packet.begin() + static_cast<std::ptrdiff_t>(idx + topicLength));
+    idx += topicLength;
+
+    std::uint16_t packetId = 0;
+    if (qos == 1)
+    {
+        if (idx + 2 > size)
+        {
+            std::cerr << kTag << ": truncated PUBLISH packet id, closing\n";
+            return false;
+        }
+        packetId = static_cast<std::uint16_t>((static_cast<std::uint16_t>(packet[idx]) << 8) | static_cast<std::uint16_t>(packet[idx + 1]));
+        idx += 2;
+
+        // Acknowledge first: the broker's in-flight window is released even if the callback is slow.
+        if (!writeAll(buildPubAckPacket(packetId)))
+        {
+            return false;
+        }
+    }
+
+    if (callback_ != nullptr)
+    {
+        const std::string message(packet.begin() + static_cast<std::ptrdiff_t>(idx), packet.end());
+        callback_->onMessageReceived(topic, message);
+    }
+
+    return true;
 }
 
 std::vector<std::uint8_t> MqttClient::buildConnectPacket(int qos, int keepAliveSeconds)
@@ -351,14 +761,15 @@ std::vector<std::uint8_t> MqttClient::buildConnectPacket(int qos, int keepAliveS
     payload.push_back('T');
     payload.push_back(0x04);
 
+    // Clean session. MQTT 3.1.1: the password flag requires the user name flag.
     std::uint8_t connectFlags = 0x02;
     if (!username_.empty())
     {
         connectFlags |= 0x80;
-    }
-    if (!password_.empty())
-    {
-        connectFlags |= 0x40;
+        if (!password_.empty())
+        {
+            connectFlags |= 0x40;
+        }
     }
     payload.push_back(connectFlags);
     payload.push_back(static_cast<std::uint8_t>((keepAliveSeconds >> 8) & 0xFF));
@@ -371,12 +782,12 @@ std::vector<std::uint8_t> MqttClient::buildConnectPacket(int qos, int keepAliveS
     {
         const auto username = encodeStringPayload(username_);
         payload.insert(payload.end(), username.begin(), username.end());
-    }
 
-    if (!password_.empty())
-    {
-        const auto password = encodeStringPayload(password_);
-        payload.insert(payload.end(), password.begin(), password.end());
+        if (!password_.empty())
+        {
+            const auto password = encodeStringPayload(password_);
+            payload.insert(payload.end(), password.begin(), password.end());
+        }
     }
 
     std::vector<std::uint8_t> packet;
@@ -402,7 +813,7 @@ std::vector<std::uint8_t> MqttClient::buildPublishPacket(const std::string& topi
 
     if (qos > 0)
     {
-        const auto packetId = static_cast<std::uint16_t>(nextPacketId_.fetch_add(1, std::memory_order_relaxed));
+        const std::uint16_t packetId = nextPacketId();
         payload.push_back(static_cast<std::uint8_t>((packetId >> 8) & 0xFF));
         payload.push_back(static_cast<std::uint8_t>(packetId & 0xFF));
     }
@@ -413,10 +824,10 @@ std::vector<std::uint8_t> MqttClient::buildPublishPacket(const std::string& topi
     return packet;
 }
 
-std::vector<std::uint8_t> MqttClient::buildPubAckPacket(uint16_t packetId)
+std::vector<std::uint8_t> MqttClient::buildPubAckPacket(std::uint16_t packetId)
 {
     std::vector<std::uint8_t> packet;
-    packet.push_back(0x40);
+    packet.push_back(kPubAck);
     packet.push_back(0x02);
     packet.push_back(static_cast<std::uint8_t>((packetId >> 8) & 0xFF));
     packet.push_back(static_cast<std::uint8_t>(packetId & 0xFF));
@@ -428,7 +839,7 @@ std::vector<std::uint8_t> MqttClient::buildSubscribePacket(const std::string& to
     std::vector<std::uint8_t> packet;
     packet.push_back(kSubscribe | 0x02);
 
-    const auto packetId = static_cast<std::uint16_t>(nextPacketId_.fetch_add(1, std::memory_order_relaxed));
+    const std::uint16_t packetId = nextPacketId();
     std::vector<std::uint8_t> payload;
     payload.push_back(static_cast<std::uint8_t>((packetId >> 8) & 0xFF));
     payload.push_back(static_cast<std::uint8_t>(packetId & 0xFF));
@@ -447,7 +858,7 @@ std::vector<std::uint8_t> MqttClient::buildUnsubscribePacket(const std::string& 
     std::vector<std::uint8_t> packet;
     packet.push_back(kUnsubscribe | 0x02);
 
-    const auto packetId = static_cast<std::uint16_t>(nextPacketId_.fetch_add(1, std::memory_order_relaxed));
+    const std::uint16_t packetId = nextPacketId();
     std::vector<std::uint8_t> payload;
     payload.push_back(static_cast<std::uint8_t>((packetId >> 8) & 0xFF));
     payload.push_back(static_cast<std::uint8_t>(packetId & 0xFF));
@@ -460,158 +871,112 @@ std::vector<std::uint8_t> MqttClient::buildUnsubscribePacket(const std::string& 
     return packet;
 }
 
-void MqttClient::parseIncomingPacket(const std::vector<std::uint8_t>& packet)
+bool MqttClient::connect(int qos, int timeout, int keepAlive)
 {
-    if (packet.size() < 5 || callback_ == nullptr)
+    if (readerThread_.joinable() && readerThread_.get_id() == std::this_thread::get_id())
     {
-        return;
+        std::cerr << kTag << ": connect() must not be called from a callback\n";
+        return false;
     }
 
-    const std::uint8_t messageType = packet[0] & 0xF0;
-    if (messageType != kPublish)
+    if (!platformStartup())
     {
-        return;
+        std::cerr << kTag << ": socket subsystem start-up failed\n";
+        return false;
     }
 
-    std::size_t idx = 1;
-    std::uint32_t remainingLength = 0;
-    std::uint32_t multiplier = 1;
-    while (true)
+    if (clientId_.size() > 65535 || username_.size() > 65535 || password_.size() > 65535)
     {
-        if (idx >= packet.size())
-        {
-            return;
-        }
-
-        const std::uint8_t byte = packet[idx++];
-        remainingLength += (static_cast<std::uint32_t>(byte & 0x7F) * multiplier);
-        if ((byte & 0x80) == 0)
-        {
-            break;
-        }
-        multiplier *= 128;
+        std::cerr << kTag << ": client id, user name or password too long\n";
+        return false;
     }
 
-    if (idx + 2 > packet.size())
+    // Tear down any previous session; this joins the reader thread.
+    disconnect();
+
+    if (qos > 1)
     {
-        return;
+        std::cerr << kTag << ": QoS 2 is not implemented, using QoS 1\n";
+    }
+    qos_.store(qos > 0 ? 1 : 0);
+    timeout_ = std::min(std::max(1, timeout), 3600);
+    keepAliveSeconds_ = std::chrono::seconds(std::min(std::max(0, keepAlive), 65535));
+
+    stopReader_.store(false);
+    isConnected_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        connectDone_ = false;
     }
 
-    const std::uint16_t topicLength = static_cast<std::uint16_t>((static_cast<std::uint16_t>(packet[idx]) << 8) | static_cast<std::uint16_t>(packet[idx + 1]));
-    idx += 2;
+    const long long deadlineMs = nowMillis() + static_cast<long long>(timeout_) * 1000LL;
 
-    if (idx + topicLength > packet.size())
+    const MqttSocket sock = platformConnect(brokerAddress_, port_, timeout_ * 1000);
+    if (sock == kInvalidMqttSocket)
     {
-        return;
+        return false;
     }
 
-    const std::string topic(packet.begin() + static_cast<std::ptrdiff_t>(idx), packet.begin() + static_cast<std::ptrdiff_t>(idx + topicLength));
-    idx += topicLength;
+    socket_.store(sock);
+    lastTxMs_.store(nowMillis());
+    lastRxMs_.store(nowMillis());
 
-    const std::uint8_t qosFlags = packet[0] & 0x06;
-    std::uint16_t packetId = 0;
-    if (qosFlags == 0x02)
-    {
-        if (idx + 2 > packet.size())
-        {
-            return;
-        }
-        packetId = static_cast<std::uint16_t>((static_cast<std::uint16_t>(packet[idx]) << 8) | static_cast<std::uint16_t>(packet[idx + 1]));
-        idx += 2;
-        const auto pubAckPacket = buildPubAckPacket(packetId);
-        writeAll(pubAckPacket);
-    }
-
-    std::string message(packet.begin() + static_cast<std::ptrdiff_t>(idx), packet.end());
-    callback_->onMessageReceived(topic, message);
-}
-
-void MqttClient::connect(int qos, int timeout)
-{
-    qos_ = qos;
-    timeout_ = timeout;
-    keepAliveSeconds_ = std::chrono::seconds(std::max(1, timeout));
-    lastActivity_ = std::chrono::steady_clock::now();
-
-    if (socketFd_ >= 0)
+    if (!writeAll(buildConnectPacket(qos_.load(), static_cast<int>(keepAliveSeconds_.count()))))
     {
         disconnect();
+        return false;
     }
 
-    socketFd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (socketFd_ < 0)
+    readerThread_ = std::thread(&MqttClient::readerLoop, this, sock);
+
     {
-        return;
+        std::unique_lock<std::mutex> lock(stateMutex_);
+        const long long remainingMs = std::max<long long>(1, deadlineMs - nowMillis());
+        connectedCv_.wait_for(lock, std::chrono::milliseconds(remainingMs), [this]() { return connectDone_; });
     }
 
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    addrinfo* result = nullptr;
-    const std::string portString = std::to_string(port_);
-    if (getaddrinfo(brokerAddress_.c_str(), portString.c_str(), &hints, &result) != 0)
+    if (!isConnected_.load())
     {
-        close(socketFd_);
-        socketFd_ = -1;
-        return;
-    }
-
-    bool connected = false;
-    for (addrinfo* info = result; info != nullptr; info = info->ai_next)
-    {
-        if (::connect(socketFd_, info->ai_addr, static_cast<socklen_t>(info->ai_addrlen)) == 0)
-        {
-            connected = true;
-            break;
-        }
-    }
-
-    freeaddrinfo(result);
-    if (!connected)
-    {
-        close(socketFd_);
-        socketFd_ = -1;
-        return;
-    }
-
-    stopReader_ = false;
-    const auto connectPacket = buildConnectPacket(qos, timeout);
-    if (!writeAll(connectPacket))
-    {
+        std::cerr << kTag << ": no CONNACK accepted within " << timeout_ << " s\n";
         disconnect();
-        return;
+        return false;
     }
 
-    lastActivity_ = std::chrono::steady_clock::now();
-    readerThread_ = std::thread(&MqttClient::readerLoop, this);
-
-    std::unique_lock<std::mutex> lock(stateMutex_);
-    connectedCv_.wait_for(lock, std::chrono::seconds(timeout), [this]() { return isConnected_; });
+    return true;
 }
 
 void MqttClient::disconnect()
 {
-    stopReader_ = true;
+    stopReader_.store(true);
 
-    int socketFd = -1;
+    if (readerThread_.joinable() && readerThread_.get_id() == std::this_thread::get_id())
     {
-        std::lock_guard<std::mutex> lock(socketMutex_);
-        if (socketFd_ >= 0)
+        // Called from a callback on the reader thread, which cannot join itself.
+        // Ask the reader to leave; the descriptor is released by the next disconnect() call
+        // from another thread (connect() and the destructor both make one).
+        isConnected_.store(false);
+        const MqttSocket current = socket_.load();
+        if (current != kInvalidMqttSocket)
         {
-            socketFd = socketFd_;
-            socketFd_ = -1;
+            platformShutdown(current);
         }
+        return;
     }
 
-    if (socketFd >= 0)
+    const MqttSocket sock = socket_.exchange(kInvalidMqttSocket);
+    if (sock != kInvalidMqttSocket)
     {
-        std::vector<std::uint8_t> packet;
-        packet.push_back(kDisconnect);
-        packet.push_back(0x00);
-        writeSocket(socketFd, packet);
-        shutdown(socketFd, SHUT_RDWR);
+        {
+            // Best-effort DISCONNECT on a live session. If a writer is stuck holding the
+            // socket, skip it: the shutdown below unblocks that writer.
+            std::unique_lock<std::mutex> lock(socketMutex_, std::try_to_lock);
+            if (lock.owns_lock() && isConnected_.load())
+            {
+                const std::vector<std::uint8_t> packet = {kDisconnect, 0x00};
+                sendAll(sock, packet);
+            }
+        }
+        platformShutdown(sock);
     }
 
     if (readerThread_.joinable())
@@ -619,44 +984,48 @@ void MqttClient::disconnect()
         readerThread_.join();
     }
 
-    if (socketFd >= 0)
+    if (sock != kInvalidMqttSocket)
     {
-        close(socketFd);
+        // Close under the write mutex: no writer can be mid-send on this descriptor.
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        platformClose(sock);
     }
 
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    isConnected_ = false;
+    isConnected_.store(false);
 }
 
-void MqttClient::publish(const std::string& topic, const std::string& message)
+bool MqttClient::publish(const std::string& topic, const std::string& message)
 {
-    if (!isConnected_ || socketFd_ < 0)
+    if (!isConnected_.load())
     {
-        return;
+        return false;
     }
 
-    const auto packet = buildPublishPacket(topic, message, qos_);
-    writeAll(packet);
+    if (topic.empty() || topic.size() > 65535 || topic.size() + message.size() + 4 > kMaxRemainingLength)
+    {
+        return false;
+    }
+
+    return writeAll(buildPublishPacket(topic, message, qos_.load()));
 }
 
-void MqttClient::subscribe(const std::string& topic)
+bool MqttClient::subscribe(const std::string& topic)
 {
-    if (!isConnected_ || socketFd_ < 0)
+    if (!isConnected_.load() || topic.empty() || topic.size() > 65535)
     {
-        return;
+        return false;
     }
 
-    const auto packet = buildSubscribePacket(topic, qos_);
-    writeAll(packet);
+    // qos_ is already limited to 0 or 1: the QoS 2 handshake is not implemented.
+    return writeAll(buildSubscribePacket(topic, qos_.load()));
 }
 
-void MqttClient::unsubscribe(const std::string& topic)
+bool MqttClient::unsubscribe(const std::string& topic)
 {
-    if (!isConnected_ || socketFd_ < 0)
+    if (!isConnected_.load() || topic.empty() || topic.size() > 65535)
     {
-        return;
+        return false;
     }
 
-    const auto packet = buildUnsubscribePacket(topic);
-    writeAll(packet);
+    return writeAll(buildUnsubscribePacket(topic));
 }
