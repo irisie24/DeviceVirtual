@@ -15,8 +15,7 @@ extern Configuration appConfig;
 extern Configuration devConfig;
 extern Configuration snsConfig;
 extern Configuration actConfig;
-extern MqttClient sensingClient;
-extern MqttClient actuationClient;
+extern MqttClient mqttClient;
 extern SignalHandler signalHandler;
 
 extern Device device;

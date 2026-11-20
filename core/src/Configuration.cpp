@@ -207,6 +207,63 @@ bool Configuration::loadConfiguration(const std::string &configFile)
     return true;
 }
 
+bool Configuration::loadFromBuffer(std::string buffer)
+{
+    std::istringstream input(buffer);
+    if (!input)
+    {
+        return false;
+    }
+
+    _ConfigurationMap.clear();
+
+    std::string currentSection;
+    std::map<std::string, std::string> currentValues;
+    std::string line;
+
+    while (std::getline(input, line))
+    {
+        std::string trimmed = trimWhitespace(line);
+        if (trimmed.empty() || trimmed[0] == ';' || trimmed[0] == '#')
+        {
+            continue;
+        }
+
+        if (trimmed.front() == '[' && trimmed.back() == ']')
+        {
+            if (!currentSection.empty())
+            {
+                addSection(currentSection, currentValues);
+            }
+
+            currentSection = trimmed.substr(1, trimmed.size() - 2);
+            currentValues.clear();
+            continue;
+        }
+
+        const std::string::size_type delimiterPos = trimmed.find('=');
+        if (delimiterPos == std::string::npos)
+        {
+            continue;
+        }
+
+        std::string key = trimWhitespace(trimmed.substr(0, delimiterPos));
+        std::string value = trimWhitespace(trimmed.substr(delimiterPos + 1));
+
+        if (!currentSection.empty() && !key.empty())
+        {
+            currentValues[key] = value;
+        }
+    }
+
+    if (!currentSection.empty())
+    {
+        addSection(currentSection, currentValues);
+    }
+
+    return true;
+}
+
 void Configuration::addSection(const std::string &str, const std::map<std::string, std::string> &list)
 {
     std::string section = str;

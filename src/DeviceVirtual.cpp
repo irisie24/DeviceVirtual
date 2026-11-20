@@ -31,7 +31,7 @@ public:
 
         // The topic we want to publish the actuation result to would typically be derived from the decision or device ID
         std::string actuationTopic = topic + "/actuation/" + device.getDeviceId();
-        actuationClient.publish(actuationTopic, str.str());
+        mqttClient.publish(actuationTopic, str.str());
         writeLog("Publishing actuation result to topic: " + actuationTopic, LogLevel::Info);
     }
 
@@ -45,53 +45,127 @@ public:
 
 DeviceVirtualActuationCallback actuationDecisionCallback;
 
+class TelemetryCallback : public SensorCallback
+{
+public:
+    TelemetryCallback()
+        : _client(nullptr)
+    {
+    }
+
+    void setClient(MqttClient* client)
+    {
+        _client = client;
+    }
+
+    void setPublishTopic(const std::string& publishTopic)
+    {
+        _publishTopic = publishTopic;
+    }
+
+    void onTelemetryReceived(const std::string& deviceid, const Telemetry& telemetry, SimulationMode mode) override
+    {
+        std::stringstream str;
+        str << "Telemetry received - Device ID: " << deviceid
+                  << ", Timestamp: " << telemetry.timestamp
+                  << ", Value: " << telemetry.value
+                  << ", Scale: " << telemetry.scale
+                  << ", Unit: " << telemetry.unitofmeasurement;
+
+        writeLog(str.str(), LogLevel::Info);
+
+		if (mode == SimulationModeDataset)
+		{
+            writeLog("Telemetry received in dataset mode - Device ID: " + deviceid, LogLevel::Info);
+			return;
+		}
+
+        if (_client != nullptr && !_publishTopic.empty())
+        {
+            writeLog("Publishing telemetry to broker - Device ID: " + deviceid, LogLevel::Info);
+            std::ostringstream message;
+            message << "deviceid=" << deviceid << ",timestamp=" << telemetry.timestamp
+                    << ",value=" << telemetry.value
+                    << ",scale=" << telemetry.scale
+                    << ",unit=" << telemetry.unitofmeasurement;
+            _client->publish(_publishTopic + "/sensing/"+ deviceid, message.str());
+        }
+
+        const bool matched =  actuation.evaluate(telemetry.value, &actuationDecisionCallback);
+        if (!matched)
+        {
+            writeLog("No actuation rule matched for sensor value: " + std::to_string(telemetry.value), LogLevel::Debug);
+        }
+    }
+
+    void onTelemetryGenerationComplete(const std::string& deviceid, const std::string& telemetryfilename) override
+    {
+        writeLogNormal("Telemetry generation complete - Device ID: " + deviceid + ", File: " + telemetryfilename);
+    }
+
+    void onMessage(const std::string& deviceid, const std::string& msg) override
+    {
+        writeLogNormal("Device ID: " + deviceid + ", Message: " + msg);
+    }
+
+private:
+    MqttClient* _client;
+    std::string _publishTopic;
+};
+
+TelemetryCallback telemetryCallback;
+
 class DeviceVirtualMqttCallback : public MqttCallback
 {
 public:
     void onMessageReceived(const std::string& topic, const std::string& message) override
     {
-        std::string str = "Received message on topic '" + topic + "': " + message;
-        writeLog(str, LogLevel::Debug);
+        // Topic will be 3 
+        // Device configuration
+        // Sensing flows
+        // Actuation rules
+        // We will use Configuration class's loadFromBuffer
 
-        if (topic.find("/actuation/") != std::string::npos)
+        if (topic.find("/device/") != std::string::npos)
         {
-            writeLog("Ignoring actuation message on dedicated actuation topic: " + topic, LogLevel::Debug);
-            return;
+            writeLog("Processing device configuration message.", LogLevel::Info);
+            if(!devConfig.loadFromBuffer(message))
+            {
+                writeLog("Failed to load device configuration from message.", LogLevel::Error);
+                return;
+            }
+
+            // Populate the device with the new configuration
+            // Use the Device,ini template to understand the mappings  
+            device.loadDeviceDefinition(devConfig);
         }
 
-        const std::string deviceIdFromTopic = parseDeviceIdFromTopic(topic);
-        const std::string deviceIdFromPayload = getTelemetryFieldValue(message, "deviceid");
-        std::string targetDeviceId = deviceIdFromTopic;
-        if (!deviceIdFromPayload.empty())
+        if(topic.find("/sensing/") != std::string::npos)
         {
-            targetDeviceId = deviceIdFromPayload;
+            writeLog("Processing sensing flow message.", LogLevel::Info);
+            if(!snsConfig.loadFromBuffer(message))
+            {
+                writeLog("Failed to load sensing configuration from message.", LogLevel::Error);
+                return;
+            }
+            device.loadSensingFlowDefinition(snsConfig);
         }
 
-        if (targetDeviceId.empty())
+        if(topic.find("/actuation/") != std::string::npos)
         {
-            writeLog("Ignoring message because device id was not found in topic or payload.", LogLevel::Debug);
-            return;
+            writeLog("Processing actuation rule message.", LogLevel::Info);
+            if(!actConfig.loadFromBuffer(message))
+            {
+                writeLog("Failed to load actuation configuration from message.", LogLevel::Error);
+                return;
+            }
+            device.loadActuationRuleDefinition(actConfig);
         }
-
-        const std::string currentDeviceId = device.getDeviceId();
-        if (!currentDeviceId.empty() && currentDeviceId != targetDeviceId)
+        
+        if(topic.find("/start/") != std::string::npos)
         {
-            writeLog("Ignoring message for a different device id: " + targetDeviceId, LogLevel::Debug);
-            return;
-        }
-
-        const std::string valueText = getTelemetryFieldValue(message, "value");
-        long sensorValue = 0;
-        if (valueText.empty() || !parseLongValue(valueText, sensorValue))
-        {
-            writeLog("Ignoring message because sensor value is missing or invalid.", LogLevel::Debug);
-            return;
-        }
-
-        const bool matched = device.getActuation().evaluate(sensorValue, &actuationDecisionCallback);
-        if (!matched)
-        {
-            writeLog("No actuation rule matched for sensor value: " + std::to_string(sensorValue), LogLevel::Debug);
+            writeLog("Starting simulation of sensing flow", LogLevel::Info);
+            device.startSensingSimulation(&telemetryCallback);
         }
     }
 
@@ -155,70 +229,6 @@ class DeviceVirtualSignalHandler : public SignalCallback
 
 DeviceVirtualSignalHandler signalEvents;
 
-class TelemetryCallback : public SensorCallback
-{
-public:
-    TelemetryCallback()
-        : _client(nullptr)
-    {
-    }
-
-    void setClient(MqttClient* client)
-    {
-        _client = client;
-    }
-
-    void setPublishTopic(const std::string& publishTopic)
-    {
-        _publishTopic = publishTopic;
-    }
-
-    void onTelemetryReceived(const std::string& deviceid, const Telemetry& telemetry, SimulationMode mode) override
-    {
-        std::stringstream str;
-        str << "Telemetry received - Device ID: " << deviceid
-                  << ", Timestamp: " << telemetry.timestamp
-                  << ", Value: " << telemetry.value
-                  << ", Scale: " << telemetry.scale
-                  << ", Unit: " << telemetry.unitofmeasurement;
-
-        writeLog(str.str(), LogLevel::Info);
-
-		if (mode == SimulationModeDataset)
-		{
-            writeLog("Telemetry received in dataset mode - Device ID: " + deviceid, LogLevel::Info);
-			return;
-		}
-
-        if (_client != nullptr && !_publishTopic.empty())
-        {
-            writeLog("Publishing telemetry to broker - Device ID: " + deviceid, LogLevel::Info);
-            std::ostringstream message;
-            message << "deviceid=" << deviceid << ",timestamp=" << telemetry.timestamp
-                    << ",value=" << telemetry.value
-                    << ",scale=" << telemetry.scale
-                    << ",unit=" << telemetry.unitofmeasurement;
-            _client->publish(_publishTopic + "/sensing/"+ deviceid, message.str());
-        }
-    }
-
-    void onTelemetryGenerationComplete(const std::string& deviceid, const std::string& telemetryfilename) override
-    {
-        writeLogNormal("Telemetry generation complete - Device ID: " + deviceid + ", File: " + telemetryfilename);
-    }
-
-    void onMessage(const std::string& deviceid, const std::string& msg) override
-    {
-        writeLogNormal("Device ID: " + deviceid + ", Message: " + msg);
-    }
-
-private:
-    MqttClient* _client;
-    std::string _publishTopic;
-};
-
-TelemetryCallback telemetryCallback;
-
 // The messaging flows is as follows:
 // Sensing class fires TelemetryCallback -> Published to broker -> DeviceVirtualMqttCallback receives it -> Actuation class acts upon it -> Actuation class publishes to broker any action taken
 
@@ -244,48 +254,6 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    // Load device configuration
-    devConfig.setConfigDirectory(resolveDataPath());
-    devConfig.setConfigFileName("Device.ini");
-    if(devConfig.loadConfiguration())
-    {
-        writeLog("Device configuration loaded successfully.", LogLevel::Info);
-    }
-    else
-    {
-        writeLog("Failed to load device configuration.", LogLevel::Error);
-        writeLog(std::string(devConfig.getConfigDirectory()+"/" + devConfig.getConfigFileName()).c_str(), LogLevel::Error);
-        return -1;
-    }
-
-    // Load sensing configuration
-    snsConfig.setConfigDirectory(resolveDataPath());
-    snsConfig.setConfigFileName("Sensing.flow.ini");
-    if(snsConfig.loadConfiguration())
-    {
-        writeLog("Sensing configuration loaded successfully.", LogLevel::Info);
-    }
-    else
-    {
-        writeLog("Failed to load sensing configuration.", LogLevel::Error);
-        writeLog(std::string(snsConfig.getConfigDirectory()+"/" + snsConfig.getConfigFileName()).c_str(), LogLevel::Error);
-        return -1;
-    }
-
-    // Load actuation configuration
-    actConfig.setConfigDirectory(resolveDataPath());
-    actConfig.setConfigFileName("Actuation.rule.ini");
-    if(actConfig.loadConfiguration())
-    {
-        writeLog("Actuation configuration loaded successfully.", LogLevel::Info);
-    }
-    else
-    {
-        writeLog("Failed to load actuation configuration.", LogLevel::Error);
-        writeLog(std::string(actConfig.getConfigDirectory()+"/" + actConfig.getConfigFileName()).c_str(), LogLevel::Error);
-        return -1;
-    }
-
     // 1 We will process the application settings 
     // Parse the configuration values for MQTT broker address, port, client ID, username, and password
     brokerAddress = appConfig.getValue("MQTT", "BrokerAddress", "127.0.0.1");
@@ -295,39 +263,26 @@ int main(int argc, char* argv[])
     password = appConfig.getValue("MQTT", "Password", "");
     topic = appConfig.getValue("MQTT", "topic", "devicevirtual");
 
-    // 2 We will process the device settings
-    // Parse the device settings from the configuration
-    device.loadDeviceDefinition(devConfig);
-
-    // 3 Load sensing flow definitions for the device
-    // The device class internally uses the Sensing class to manage flow definitions
-    device.loadSensingFlowDefinition(snsConfig);
-
-    // 4 Load actuation rule definitions for the device
-    device.loadActuationRuleDefinition(actConfig);
-
     // Intialize the sensing mqtt client
-    sensingClient.Initialize(brokerAddress, port, clientId+"Sensing", username, password, &callback);
-    sensingClient.connect(1, 3600);
+    mqttClient.Initialize(brokerAddress, port, clientId, username, password, &callback);
+    mqttClient.connect(1, 3600);
 
-    // Intialize the actuation mqtt client
-    actuationClient.Initialize(brokerAddress, port, clientId+"Actuation", username, password, &callback);
-    actuationClient.connect(1, 3600);
-
-    telemetryCallback.setClient(&sensingClient);
+    telemetryCallback.setClient(&mqttClient);
     telemetryCallback.setPublishTopic(topic);
     device.startSensingSimulation(&telemetryCallback);
 
     // Subscribe only to the telemetry topic. Actuation result updates use a dedicated topic so we do not re-enter the sensing callback loop.
-    actuationClient.subscribe(topic+"/sensing/#");
+    mqttClient.subscribe(topic+"/device/#");
+    mqttClient.subscribe(topic+"/sensing/#");
+    mqttClient.subscribe(topic+"/actuation/#");
+    mqttClient.subscribe(topic+"/start/#");
 
     while(running)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
  
-    sensingClient.disconnect();
-    actuationClient.disconnect();
+    mqttClient.disconnect();
     writeLog("MQTT clients disconnected.", LogLevel::Info);
 
     return 0;

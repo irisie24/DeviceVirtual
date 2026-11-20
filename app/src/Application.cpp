@@ -17,8 +17,7 @@ Device device;
 Sensing sensing;
 Actuation actuation;
 
-MqttClient sensingClient;
-MqttClient actuationClient;
+MqttClient mqttClient;
 SignalHandler signalHandler;
 Logger* loggerRefPtr = nullptr;
 

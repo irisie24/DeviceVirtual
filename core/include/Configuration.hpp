@@ -21,6 +21,7 @@ public:
 	std::string getConfigFileName();
 	bool loadConfiguration();
 	bool loadCustomConfiguration(const std::string &configFile);
+	bool loadFromBuffer(std::string buffer);
 	std::string getValue(const std::string &section, const std::string &settingKey, const std::string defval = "");
 	bool isSection(const std::string &section);
 	std::list<std::string> getSections();
