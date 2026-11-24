@@ -261,7 +261,7 @@ int main(int argc, char* argv[])
     clientId = appConfig.getValue("MQTT", "ClientId", "DeviceVirtual");
     username = appConfig.getValue("MQTT", "Username", "");
     password = appConfig.getValue("MQTT", "Password", "");
-    topic = appConfig.getValue("MQTT", "topic", "devicevirtual");
+    topic = appConfig.getValue("MQTT", "Topic", "devicevirtual");
 
     // Intialize the sensing mqtt client
     mqttClient.Initialize(brokerAddress, port, clientId, username, password, &callback);
@@ -280,6 +280,7 @@ int main(int argc, char* argv[])
     while(running)
     {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        mqttClient.publish(topic+"/keepalive", clientId);
     }
  
     mqttClient.disconnect();
